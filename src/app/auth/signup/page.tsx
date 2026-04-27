@@ -8,10 +8,14 @@ export default function SignUpPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [verificationUrl, setVerificationUrl] = useState("");
+  const [lastEmail, setLastEmail] = useState("");
+  const [resendMessage, setResendMessage] = useState("");
+  const [resendLoading, setResendLoading] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function onSubmit(formData: FormData) {
     setError("");
+    setResendMessage("");
     setLoading(true);
     const payload = {
       name: String(formData.get("name") || ""),
@@ -29,9 +33,33 @@ export default function SignUpPage() {
       setLoading(false);
       return;
     }
+    setLastEmail(payload.email);
     setMessage(json.message || "Account created. Please verify your email.");
     setVerificationUrl(json.verificationUrl || "");
     setLoading(false);
+  }
+
+  async function onResend() {
+    if (!lastEmail) return;
+    setError("");
+    setResendMessage("");
+    setResendLoading(true);
+    const response = await fetch("/api/auth/resend-verification", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: lastEmail }),
+    });
+    const json = await response.json();
+    if (!response.ok) {
+      setError(json.error || "Could not resend verification email.");
+      setResendLoading(false);
+      return;
+    }
+    setResendMessage(json.message || "Verification email sent.");
+    if (json.verificationUrl) {
+      setVerificationUrl(json.verificationUrl);
+    }
+    setResendLoading(false);
   }
 
   return (
@@ -47,6 +75,17 @@ export default function SignUpPage() {
         </button>
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
         {message ? <p className="text-sm text-emerald-700">{message}</p> : null}
+        {message && lastEmail ? (
+          <button
+            type="button"
+            onClick={onResend}
+            disabled={resendLoading}
+            className="text-sm font-medium text-blue-700 underline disabled:opacity-60"
+          >
+            {resendLoading ? "Resending..." : "Resend verification email"}
+          </button>
+        ) : null}
+        {resendMessage ? <p className="text-sm text-emerald-700">{resendMessage}</p> : null}
         {verificationUrl ? (
           <button
             type="button"
