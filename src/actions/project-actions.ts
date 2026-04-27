@@ -20,6 +20,12 @@ export async function createProjectAction(formData: FormData) {
     where: { id: userId },
     select: { subscriptionPlan: true, email: true },
   });
+  // Stale auth cookie/session can reference a user id that does not
+  // exist in the active database (e.g. env/database switch). Redirect
+  // to sign-in instead of triggering FK crashes on create.
+  if (!user) {
+    redirect("/auth/signin?error=session_outdated");
+  }
   const unlimitedProjects =
     user?.subscriptionPlan === "pro" || isAdminEmail(user?.email);
   if (!unlimitedProjects) {

@@ -29,6 +29,18 @@ export async function getOrCreateUsageLimit(userId: string) {
     where: { id: userId },
     select: { subscriptionPlan: true, email: true },
   });
+  // Can happen with stale session cookies pointing to a user id
+  // that doesn't exist in the current database (e.g. switched DB env).
+  // Return a safe fallback instead of crashing on FK create.
+  if (!user) {
+    return {
+      id: "missing-user-fallback",
+      userId,
+      month: currentUsageMonth(),
+      aiReviewsUsed: 0,
+      aiReviewsLimit: FREE_REVIEW_LIMIT,
+    };
+  }
   const computedLimit = isAdminEmail(user?.email)
     ? ADMIN_REVIEW_LIMIT
     : user?.subscriptionPlan === "pro"

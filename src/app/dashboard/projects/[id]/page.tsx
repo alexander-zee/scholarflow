@@ -39,7 +39,7 @@ export default async function ProjectDetailPage({
 
   return (
     <>
-      <main className="relative left-1/2 right-1/2 flex h-[calc(100dvh-2.75rem)] min-h-0 w-screen -translate-x-1/2 flex-col overflow-hidden">
+      <main className="relative left-1/2 right-1/2 flex min-h-[calc(100dvh-2.75rem)] w-screen -translate-x-1/2 flex-col overflow-x-hidden">
         <div className="absolute inset-0 -z-20 bg-gradient-to-b from-[#f4f8ff] via-white to-[#f8fbff]" />
         <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
           <div className="absolute left-[1%] top-[6%] h-[30rem] w-[30rem] rounded-full bg-sky-300/50 blur-[150px]" />
@@ -49,7 +49,7 @@ export default async function ProjectDetailPage({
           <div className="absolute left-[46%] top-[16%] h-72 w-72 rounded-full bg-blue-200/30 blur-[112px]" />
         </div>
         <div className="absolute inset-x-0 bottom-0 -z-10 h-[238px] bg-[#090f1f]" />
-        <section className="mx-auto flex w-full max-w-[1500px] flex-1 min-h-0 flex-col px-4 pb-3 pt-2">
+        <section className="mx-auto flex w-full max-w-[1500px] flex-1 min-h-[calc(100dvh-2.75rem)] flex-col px-4 pb-10 pt-2">
           <div className="min-h-0 flex-1 overflow-hidden rounded-2xl bg-transparent p-4">
             <ReferenceOutlinePanel
               projectId={id}
@@ -60,6 +60,7 @@ export default async function ProjectDetailPage({
             />
           </div>
         </section>
+        <div className="h-[36vh] shrink-0" aria-hidden />
         <footer className="sf-landing-bleed sf-footer-bleed relative mt-1 h-[208px] shrink-0 border-t border-slate-900/20 bg-[#090f1f] px-6 text-slate-300">
           <div className="mx-auto flex h-full w-full max-w-[1780px] flex-col justify-center gap-4">
             <div className="flex items-center gap-10 text-[10px] uppercase tracking-[0.16em] text-slate-300/90 md:text-xs">

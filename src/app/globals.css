@@ -319,6 +319,59 @@ textarea.editor-jump-active::selection {
   height: 0;
 }
 
+@keyframes sf-support-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes sf-support-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sf-support-panel-enter {
+  animation: sf-support-panel-in 220ms ease-out both;
+}
+
+.sf-support-content-enter {
+  animation: sf-support-content-in 300ms ease-out 70ms both;
+}
+
+.sf-support-input-enter {
+  animation: sf-support-content-in 280ms ease-out 120ms both;
+}
+
+/* Dropzone dashed border with fewer, longer dashes */
+.sf-dropzone-dash-strong {
+  border-radius: 28px;
+  border: 0;
+  background:
+    repeating-linear-gradient(90deg, #475569 0 12px, transparent 12px 20px) top left / calc(100% - 24px) 2px no-repeat,
+    repeating-linear-gradient(90deg, #475569 0 12px, transparent 12px 20px) bottom left / calc(100% - 24px) 2px no-repeat,
+    repeating-linear-gradient(0deg, #475569 0 12px, transparent 12px 20px) top left / 2px calc(100% - 24px) no-repeat,
+    repeating-linear-gradient(0deg, #475569 0 12px, transparent 12px 20px) top right / 2px calc(100% - 24px) no-repeat;
+}
+
+.sf-dropzone-dash-strong-active {
+  background:
+    repeating-linear-gradient(90deg, rgba(31, 157, 224, 0.9) 0 12px, transparent 12px 20px) top left / calc(100% - 24px) 2px no-repeat,
+    repeating-linear-gradient(90deg, rgba(31, 157, 224, 0.9) 0 12px, transparent 12px 20px) bottom left / calc(100% - 24px) 2px no-repeat,
+    repeating-linear-gradient(0deg, rgba(31, 157, 224, 0.9) 0 12px, transparent 12px 20px) top left / 2px calc(100% - 24px) no-repeat,
+    repeating-linear-gradient(0deg, rgba(31, 157, 224, 0.9) 0 12px, transparent 12px 20px) top right / 2px calc(100% - 24px) no-repeat;
+}
+
 /* FAQ / light bands — faint cyan grid so the page isn’t flat white */
 .sf-faq-pattern {
   position: relative;
