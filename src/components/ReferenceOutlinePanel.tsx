@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 type ReferenceRow = {
@@ -62,10 +63,14 @@ function SliderRow({
 
 export default function ReferenceOutlinePanel({
   projectId,
+  projectTitle,
+  projectLanguage,
   references,
   hasOutline,
 }: {
   projectId: string;
+  projectTitle: string;
+  projectLanguage: string;
   references: ReferenceRow[];
   hasOutline: boolean;
 }) {
@@ -86,6 +91,7 @@ export default function ReferenceOutlinePanel({
   const [citationCoverage, setCitationCoverage] = useState(50);
   const [documentLanguage, setDocumentLanguage] = useState("English");
   const [emailOnComplete, setEmailOnComplete] = useState(false);
+  const [showBottomActionBar, setShowBottomActionBar] = useState(hasOutline);
 
   const canGenerate = useMemo(
     () => references.length > 0 && prompt.trim().length >= 20,
@@ -199,6 +205,7 @@ export default function ReferenceOutlinePanel({
 
       setMessage(`Created ${json.sectionsCreated} outline section(s).`);
       setPrompt("");
+      setShowBottomActionBar(true);
       router.refresh();
     } catch {
       setError("Outline generation failed.");
@@ -252,6 +259,7 @@ export default function ReferenceOutlinePanel({
 
       setMessage(`Generated ${json.sectionsCreated} draft chapter(s). Scroll to Document sections.`);
       setDraftProgress(100);
+      setShowBottomActionBar(true);
       router.refresh();
     } catch {
       setError("Full draft generation failed.");
@@ -449,6 +457,39 @@ export default function ReferenceOutlinePanel({
 
           {message ? <p className="pt-2 text-sm font-medium text-emerald-700">{message}</p> : null}
           {error ? <p className="pt-2 text-sm font-medium text-red-600">{error}</p> : null}
+
+          {showBottomActionBar ? (
+            <div className="mt-3 rounded-xl border border-slate-200/80 bg-white p-2 shadow-[0_6px_18px_rgba(15,23,42,0.05)]">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Link href={`/dashboard/projects/${projectId}/review`} className="rounded-md bg-[#1e9ee0] px-3 py-1.5 text-[11px] font-semibold text-white">
+                  Open Writing Studio
+                </Link>
+                <Link href={`/dashboard/projects/${projectId}/history`} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] text-slate-700">
+                  Feedback history
+                </Link>
+                <a href={`/api/projects/${projectId}/export?format=pdf`} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] text-slate-700">
+                  Export PDF
+                </a>
+                <a href={`/api/projects/${projectId}/export?format=txt`} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] text-slate-700">
+                  Export TXT
+                </a>
+                <a href={`/api/projects/${projectId}/export?format=md`} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] text-slate-700">
+                  Export MD
+                </a>
+                <a href={`/api/projects/${projectId}/export?format=tex`} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] text-slate-700">
+                  Export LaTeX
+                </a>
+                <Link href={`/dashboard/projects/${projectId}/print`} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] text-slate-700">
+                  Print
+                </Link>
+                <div className="ml-auto flex items-center gap-2 pr-1 text-[10px] text-slate-400">
+                  <span className="truncate font-medium text-slate-700">{projectTitle}</span>
+                  <span>•</span>
+                  <span>{projectLanguage}</span>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
     </section>
