@@ -22,6 +22,7 @@ export default function SignUpPage() {
       email: String(formData.get("email") || ""),
       password: String(formData.get("password") || ""),
     };
+    setLastEmail(payload.email);
     const response = await fetch("/api/auth/signup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -30,10 +31,13 @@ export default function SignUpPage() {
     const json = await response.json();
     if (!response.ok) {
       setError(json.error || "Signup failed.");
+      // Keep resend available when account already exists but is unverified.
+      if (String(json.error || "").toLowerCase().includes("already exists")) {
+        setResendMessage("If this account is not verified yet, you can resend verification email.");
+      }
       setLoading(false);
       return;
     }
-    setLastEmail(payload.email);
     setMessage(json.message || "Account created. Please verify your email.");
     setVerificationUrl(json.verificationUrl || "");
     setLoading(false);
@@ -75,7 +79,7 @@ export default function SignUpPage() {
         </button>
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
         {message ? <p className="text-sm text-emerald-700">{message}</p> : null}
-        {message && lastEmail ? (
+        {(message || error) && lastEmail ? (
           <button
             type="button"
             onClick={onResend}
