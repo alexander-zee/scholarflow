@@ -1,6 +1,5 @@
 import Link from "next/link";
 import LandingPricingSection from "@/components/LandingPricingSection";
-import LandingProductPreview from "@/components/LandingProductPreview";
 import LandingReveal from "@/components/LandingReveal";
 import LandingFullThesisFeaturePanel from "@/components/LandingFullThesisFeaturePanel";
 import LandingThesisFlowVisual from "@/components/LandingThesisFlowVisual";
@@ -19,64 +18,62 @@ import {
 
 const faqs: { q: string; a: string }[] = [
   {
-    q: "Can I control the target length of my draft?",
-    a: "Yes. You can steer scope by refining outline sections and iterating in the writing studio. ThesisPilot is designed for staged drafting and revision, so you can expand or compress sections before final export.",
+    q: "Can ThesisPilot generate a full thesis?",
+    a: "Yes. ThesisPilot generates a full BSc or MSc thesis draft from your uploaded source material, then lets you revise section by section before export.",
+  },
+  {
+    q: "Can it handle Econometrics and STEM theses?",
+    a: "Yes. ThesisPilot supports technical structures across econometrics and STEM workflows, including methodology-heavy chapters and notation-aware drafting.",
+  },
+  {
+    q: "Can it generate figures, tables, equations, and appendices?",
+    a: "It is built for structured academic drafts that include figures, tables, equations, and appendices when supported by your sources and prompt context.",
   },
   {
     q: "Can I upload my own references and cite them?",
-    a: "Yes. Upload PDFs or text-based documents to your project first; ThesisPilot uses those sources to shape outlines and draft scaffolding. Stronger citations depend on clean, extractable source text.",
+    a: "Yes. Upload papers, PDFs, notes, and web sources to ground generation in your own material and keep citation context tied to your project.",
+  },
+  {
+    q: "Can I control the target length and structure?",
+    a: "Yes. You can steer chapter scope, section depth, and revision direction before export.",
   },
   {
     q: "What exports are available?",
-    a: "You can export to PDF, print, plain text, Markdown, and LaTeX. If you need Word, the current path is exporting plain text/Markdown/LaTeX and converting in your preferred editor.",
+    a: "You can export your thesis to LaTeX, PDF, Markdown, and print-ready outputs without retyping.",
   },
   {
     q: "How is this different from a generic AI chat?",
-    a: "ThesisPilot is project-based: references, outline, generated draft sections, structured review, anchored comments, and supervisor chat in one workflow. It is built for long-form thesis iteration, not one-off prompts.",
+    a: "Generic chat is built for short conversations. ThesisPilot is built for full thesis workflows: source ingestion, structured generation, citations, review, and export.",
   },
   {
     q: "Does ThesisPilot guarantee AI-detection bypass?",
-    a: "No. ThesisPilot is a revision and learning workspace, not a bypass tool. You should treat outputs as editable scaffolding and submit only work you understand and can defend.",
-  },
-  {
-    q: "Which languages are supported?",
-    a: "You can set a project language and prompts/outputs follow that setting. Quality varies by language; English is typically strongest with current models.",
-  },
-  {
-    q: "What if my PDF does not extract correctly?",
-    a: "Some PDFs are scans and contain little machine-readable text. In that case, use OCR or upload text-native PDFs/DOCX so ThesisPilot can properly index and use the source.",
-  },
-  {
-    q: "How do review limits work?",
-    a: "Outline generation, full-draft generation, structured reviews, and supervisor chat consume monthly AI allowance. Limits depend on your plan and reset each billing cycle.",
+    a: "No. ThesisPilot is a writing and revision workspace, not a bypass tool. You should review outputs carefully and submit only work you understand and can defend.",
   },
 ];
 
 export default function Home() {
   return (
-    <section
-      className="relative min-h-screen overflow-x-hidden bg-white bg-cover bg-center bg-no-repeat"
-      style={{
-        backgroundImage: "url('/thesispilot-wave-bg.png')",
-        backgroundPosition: "center top",
-      }}
-    >
-      <div className="pointer-events-none absolute inset-0 bg-white/20" aria-hidden />
+    <section className="sf-landing-bleed relative min-h-screen overflow-x-hidden bg-[#f8fbff]">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(140%_90%_at_12%_0%,rgba(23,107,255,0.09),transparent_58%),radial-gradient(100%_80%_at_92%_8%,rgba(2,132,199,0.07),transparent_62%),linear-gradient(180deg,#f8fbff_0%,#f4f8ff_42%,#f8fbff_100%)]"
+      />
       <div className="relative z-10 min-h-screen">
-        <main className="relative z-0 flex min-h-screen w-full flex-col overflow-x-hidden bg-transparent text-[#071A3A] dark:text-slate-100">
+        <main className="relative z-0 flex min-h-screen w-full flex-col overflow-x-hidden bg-[#f8fbff] text-[#071A3A] dark:text-slate-100">
           <div className="relative z-10 flex-1 space-y-8 md:space-y-10">
             {/* Hero — full-bleed section; content centered inside landingMax */}
             <LandingReveal>
-              <section className="relative w-full overflow-x-hidden bg-transparent py-12 md:py-14 lg:min-h-[min(84vh,880px)] lg:py-16">
-                <div className={`${landingMax} relative z-10`}>
-                  <div className="grid grid-cols-1 items-center gap-8 lg:grid-cols-2 lg:gap-10 lg:min-h-[min(520px,58vh)]">
+              <section className="relative isolate w-full min-h-[720px] overflow-visible bg-[#f8fbff] py-12 md:py-14 lg:py-16">
+                <div className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-r from-[#f8fbff]/95 via-[#f8fbff]/70 to-transparent [mask-image:linear-gradient(to_right,black_0%,black_62%,transparent_100%)]" aria-hidden />
+                <div className="relative z-10 mx-auto w-full max-w-[1500px] px-8 lg:px-12">
+                  <div className="grid grid-cols-1 items-center gap-8 lg:grid-cols-[1.22fr_1fr] lg:gap-8 lg:min-h-[min(520px,58vh)]">
                     <div className="min-w-0 max-w-xl">
                       <h1 className="max-w-xl text-pretty text-4xl font-bold leading-[1.08] tracking-[-0.025em] text-[#071A3A] dark:text-white sm:text-5xl sm:leading-[1.06] md:text-6xl md:leading-[1.04] lg:text-[3.5rem] lg:leading-[1.03]">
-                        Finish your thesis with{" "}
-                        <span className="text-[#176BFF] dark:text-[#5B9DFF]">AI supervision</span>.
+                        Generate a complete thesis{" "}
+                        <span className="text-[#176BFF] dark:text-[#5B9DFF]">— citations, tables, figures, equations.</span>
                       </h1>
                       <p className="mt-7 max-w-xl text-pretty text-lg font-normal leading-relaxed text-[#52627A] dark:text-slate-400/88 md:mt-9 md:text-xl md:leading-relaxed">
-                        From econometrics chapters to supervisor rounds — ThesisPilot outlines, drafts, and reviews in one workspace so you{" "}
+                        Upload your papers, references, PDFs, and notes. ThesisPilot turns them into a structured BSc or MSc thesis with real citations, mathematical notation, figures, tables, and appendices — then helps you refine it with an AI supervisor so you{" "}
                         <span className="box-decoration-clone rounded-md bg-[#E8F0FF]/95 px-1.5 py-0.5 font-medium text-[#071A3A] shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] ring-1 ring-[#176BFF]/25 dark:bg-slate-800/95 dark:text-slate-100 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] dark:ring-white/12">
                           keep authorship and control exports
                         </span>
@@ -84,7 +81,7 @@ export default function Home() {
                       </p>
                       <div className="mt-11 flex flex-wrap items-center gap-4 md:mt-14">
                         <Link href="/auth/signup" className={landingPrimaryCta}>
-                          <span>Get started — it&apos;s free</span>
+                          <span>Generate thesis — it&apos;s free</span>
                         </Link>
                         <Link href="/auth/signin" className={landingSecondaryCta}>
                           Sign in
@@ -92,10 +89,12 @@ export default function Home() {
                       </div>
                     </div>
 
-                    <div className="flex min-h-0 min-w-0 w-full justify-end lg:min-h-[min(36rem,62vh)]">
-                      <div className="w-full max-w-xl lg:max-w-none">
-                        <LandingProductPreview className="h-full w-full min-w-0" />
-                      </div>
+                    <div className="relative flex min-h-0 min-w-0 flex-1 items-center justify-end overflow-visible bg-transparent lg:min-h-[min(36rem,62vh)]">
+                      <img
+                        src="/backgrounds/papers.png"
+                        alt="Thesis preview"
+                        className="ml-auto w-full max-w-[520px] bg-transparent drop-shadow-[0_24px_48px_rgba(0,0,0,0.12)] transition-transform duration-500 sm:w-[560px] sm:max-w-none lg:w-[700px] lg:max-w-none lg:translate-x-6 lg:rotate-[-8deg] lg:scale-[1.15] lg:drop-shadow-[0_60px_120px_rgba(0,0,0,0.18)] lg:hover:scale-[1.18]"
+                      />
                     </div>
                   </div>
                 </div>
@@ -104,13 +103,13 @@ export default function Home() {
 
             {/* Trust strip — headline + subheadline only */}
             <LandingReveal>
-              <section className="relative w-full bg-transparent py-8 md:py-10">
-                <div className={`${landingMax} text-center`}>
+              <section className="relative w-full overflow-hidden bg-transparent py-8 md:py-10">
+                <div className={`${landingMax} relative z-10 text-center`}>
                   <h2 className="mx-auto max-w-[44rem] text-4xl font-bold leading-[1.08] tracking-tight text-[#071A3A] dark:text-white sm:text-5xl sm:leading-[1.06] md:text-6xl md:leading-[1.05] lg:text-[3.5rem] lg:leading-[1.04]">
-                    Your thesis, supervised from start to finish
+                    Your thesis, generated from start to finish
                   </h2>
                   <p className="mx-auto mt-4 max-w-2xl text-lg font-normal leading-snug text-[#52627A] dark:text-slate-400 md:mt-5 md:text-xl md:leading-relaxed">
-                    ThesisPilot puts your draft and supervisor feedback in one place with exports you control until submission.
+                    ThesisPilot brings your sources, draft generation, academic structure, figures, citations, and supervisor-style review into one workspace — so you can move from source material to export without retyping.
                   </p>
                 </div>
               </section>
@@ -129,35 +128,40 @@ export default function Home() {
 
             {/* How it works — premium step row, Lucide orbs */}
             <LandingReveal>
-              <LandingHowItWorks />
+              <section className="relative overflow-hidden">
+                <div className="relative z-10">
+                  <LandingHowItWorks />
+                </div>
+              </section>
             </LandingReveal>
 
             {/* vs generic */}
             <LandingReveal>
-              <section className="border-t border-[#D9E8FF] py-12 text-[#071A3A] dark:border-white/[0.04] dark:text-white md:py-14">
-                <div className={landingMax}>
+              <section className="relative overflow-hidden border-t border-[#D9E8FF] py-12 text-[#071A3A] dark:border-white/[0.04] dark:text-white md:py-14">
+                <div className={`${landingMax} relative z-10`}>
                   <h2 className={`${landingH2} text-center`}>ThesisPilot vs generic chat</h2>
                   <p className={`${landingLead} mx-auto mt-4 max-w-2xl text-center`}>
-                    Generic tools optimize for short messages. ThesisPilot optimizes for long-form academic iteration: structure, evidence,
-                    and repeatable review.
+                    Generic tools are built for short conversations. ThesisPilot is built for complete academic documents: sources, structure, citations, equations, figures, review, and export.
                   </p>
                   <div className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-2 md:gap-6">
                     <div className={`${landingGlassCard} p-7 md:p-8`}>
                       <p className="text-xs font-bold uppercase tracking-widest text-[#176BFF] dark:text-sky-300/90">ThesisPilot</p>
                       <ul className="mt-5 space-y-3 text-sm leading-[1.6] text-[#52627A] dark:text-slate-200/95">
-                        <li>• Project memory + reference uploads</li>
-                        <li>• Outline + draft sections you can export</li>
-                        <li>• Structured review + anchored jump-to-text</li>
-                        <li>• Cost-capped supervisor chat</li>
+                        <li>• Full thesis generation from uploaded sources</li>
+                        <li>• Source-grounded citations and reference tracking</li>
+                        <li>• Figures, tables, equations, and appendices</li>
+                        <li>• Structured chapters you can revise and export</li>
+                        <li>• AI Supervisor for targeted review</li>
                       </ul>
                     </div>
                     <div className={`${landingGlassCard} border-[#E2E8F0] bg-[#F8FAFC]/90 p-7 hover:border-[#CBD5E1] md:p-8 dark:border-white/[0.08] dark:bg-white/[0.035] dark:hover:border-white/12 dark:supports-[backdrop-filter]:bg-white/[0.025]`}>
                       <p className="text-xs font-bold uppercase tracking-widest text-[#94A3B8]">Generic chat</p>
                       <ul className="mt-5 space-y-3 text-sm leading-[1.6] text-[#64748B] dark:text-slate-400">
                         <li>• Easy to lose thread across long drafts</li>
-                        <li>• Weak guarantees on citations and evidence</li>
-                        <li>• Hard to keep a repeatable thesis workflow</li>
-                        <li>• Often pushes long ghostwritten blocks</li>
+                        <li>• Weak workflow for full thesis structure</li>
+                        <li>• Hard to manage citations, figures, and appendices</li>
+                        <li>• No clean export pipeline</li>
+                        <li>• Often produces disconnected long-form text</li>
                       </ul>
                     </div>
                   </div>
@@ -168,30 +172,29 @@ export default function Home() {
             {/* Studio strip */}
             <LandingReveal>
               <section className={`${landingMax} border-t border-[#D9E8FF] py-10 dark:border-white/[0.04] md:py-12`}>
-                <h2 className={landingH2}>Writing studio + AI supervisor</h2>
+                <h2 className={landingH2}>Thesis generator + AI supervisor</h2>
                 <p className={landingLead}>
-                  Draft on the left. On the right: structured reviews, anchored comments, and short supervisor chat tuned for the{" "}
-                  <strong className="font-medium text-[#071A3A] dark:text-slate-300">next best action</strong> — like a supervisor corridor conversation.
+                  Generate the full draft first. Then revise section by section with structured reviews, anchored comments, and focused supervisor-style guidance.
                 </p>
                 <div className="mt-6 grid grid-cols-1 gap-6 md:mt-8 lg:grid-cols-[1.4fr_1fr] lg:gap-6">
                   <div className={`${landingGlassCard} p-6 md:p-7`}>
                     <p className="text-[10px] font-bold uppercase tracking-widest text-[#176BFF] dark:text-sky-400/90">Draft editor</p>
                     <p className="mt-5 rounded-xl border border-[#D9E8FF] bg-[#F5FAFF]/95 p-4 text-sm leading-[1.75] text-[#52627A] backdrop-blur-sm dark:border-white/[0.08] dark:bg-black/25 dark:text-slate-300">
-                      <span className="text-amber-800/95 dark:text-amber-200/90">Your claim here should be scoped to a testable hypothesis…</span>{" "}
-                      <span className="text-[#176BFF] dark:text-sky-200/90">…and tied to a cited source from your uploaded references.</span>
+                      <span className="text-amber-800/95 dark:text-amber-200/90">Generated methodology section with model notation, variable definitions, and cited assumptions…</span>{" "}
+                      <span className="text-[#176BFF] dark:text-sky-200/90">…ready for targeted revision before export.</span>
                     </p>
                   </div>
                   <div className={`${landingGlassCard} p-6 md:p-7`}>
                     <p className="text-[10px] font-bold uppercase tracking-widest text-[#2563EB] dark:text-cyan-400/90">Supervisor</p>
                     <ul className="mt-5 space-y-3 text-xs leading-[1.65] text-[#52627A] dark:text-slate-400 md:text-sm">
                       <li>
-                        <span className="font-bold text-[#176BFF] dark:text-sky-200">Call</span> — tighten the claim scope.
+                        <span className="font-bold text-[#176BFF] dark:text-sky-200">Call</span> — link the model to the research question.
                       </li>
                       <li>
-                        <span className="font-bold text-amber-800 dark:text-amber-200">Watch</span> — add one primary citation.
+                        <span className="font-bold text-amber-800 dark:text-amber-200">Watch</span> — add a citation for the identification assumption.
                       </li>
                       <li>
-                        <span className="font-bold text-[#071A3A] dark:text-teal-200">Next</span> — rewrite the hypothesis in one sentence.
+                        <span className="font-bold text-[#071A3A] dark:text-teal-200">Next</span> — rewrite the hypothesis in one measurable sentence.
                       </li>
                     </ul>
                   </div>
@@ -200,13 +203,18 @@ export default function Home() {
             </LandingReveal>
 
             <LandingReveal>
-              <LandingPricingSection variant="light" />
+              <section className="relative overflow-hidden">
+                <div className="relative z-10">
+                  <LandingPricingSection variant="light" />
+                </div>
+              </section>
             </LandingReveal>
 
             {/* FAQ */}
             <LandingReveal>
-              <section className={`${landingMax} border-t border-[#D9E8FF] py-10 pb-6 dark:border-white/[0.04] md:py-12`}>
-                <div className="mx-auto max-w-3xl">
+              <section className="relative overflow-hidden border-t border-[#D9E8FF] py-10 pb-6 dark:border-white/[0.04] md:py-12">
+                <div className={`${landingMax} relative z-10`}>
+                  <div className="mx-auto max-w-3xl">
                   <h2 className={`${landingH2} text-center`}>Frequently asked questions</h2>
                   <p className={`${landingLead} mx-auto mt-4 max-w-lg text-center`}>
                     Everything you need to know about ThesisPilot for thesis workflow decisions.
@@ -234,6 +242,7 @@ export default function Home() {
                       </details>
                     ))}
                   </div>
+                </div>
                 </div>
               </section>
             </LandingReveal>

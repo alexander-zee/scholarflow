@@ -40,7 +40,7 @@ html.dark {
 body {
   color: var(--foreground);
   font-family: var(--font-sans), system-ui, sans-serif;
-  background-color: #f1f5f9;
+  background-color: #f8fbff;
   background-image: none;
   background-attachment: fixed;
 }

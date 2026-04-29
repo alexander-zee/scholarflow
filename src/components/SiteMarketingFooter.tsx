@@ -30,13 +30,13 @@ export default function SiteMarketingFooter({
 
   if (surface === "marketing") {
     return (
-      <footer className={`${shellClass} ${py} ${className}`.trim()}>
-        <div className="mx-auto w-full max-w-[1180px] px-4 md:px-6">
+      <footer className={`${shellClass} ${py} relative overflow-hidden ${className}`.trim()}>
+        <div className="relative z-10 mx-auto w-full max-w-[1180px] px-4 md:px-6">
           <div className="grid gap-12 lg:grid-cols-12 lg:gap-10 lg:gap-y-14">
             <div className="lg:col-span-5">
               <p className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white md:text-3xl">ThesisPilot</p>
               <p className="mt-3 max-w-md text-sm leading-relaxed text-slate-600 dark:text-slate-400 md:text-base">
-                Thesis workspace: references, outlines, studio revision, exports — you keep authorship.
+                Thesis workspace: source-grounded generation, citations, figures, equations, review, and exports — you keep authorship.
               </p>
               <Link
                 href="/auth/signup"
@@ -121,9 +121,7 @@ export default function SiteMarketingFooter({
           <div className="max-w-3xl">
             <p className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white md:text-3xl">ThesisPilot</p>
             <p className="mt-4 max-w-2xl text-sm leading-relaxed text-slate-600 dark:text-slate-400 md:text-base md:leading-relaxed">
-              Thesis-direction workspace: references, outlines, editable draft scaffolding, structured review, anchored
-              supervisor comments, and integrity-first guidance. You keep authorship and accountability for every
-              submission.
+              Thesis workspace: source-grounded generation, citations, figures, equations, review, and exports — you keep authorship and accountability for every submission.
             </p>
           </div>
           <p className="shrink-0 text-xs text-slate-500 md:text-right md:text-sm">

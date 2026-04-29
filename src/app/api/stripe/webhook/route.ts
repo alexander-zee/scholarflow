@@ -2,7 +2,10 @@ import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
-import { prisma } from "@/lib/prisma";
+import {
+  markUserFreeAfterSubscriptionRemoved,
+  syncUserFromStripeSubscription,
+} from "@/lib/stripe-subscription-sync";
 
 export async function POST(request: Request) {
   const stripe = getStripe();
@@ -12,49 +15,47 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Missing webhook signature." }, { status: 400 });
   }
 
-  let event;
+  let event: Stripe.Event;
   try {
     event = stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET);
   } catch {
     return NextResponse.json({ error: "Invalid webhook signature." }, { status: 400 });
   }
 
-  if (event.type === "customer.subscription.updated" || event.type === "customer.subscription.created") {
-    const subscription = event.data.object as Stripe.Subscription;
-    const customerId = subscription.customer as string;
-    const subId = subscription.id;
-    const status = subscription.status;
-    const plan = subscription.items.data[0]?.price?.nickname || "pro";
-    const periodEndUnix = (subscription as unknown as { current_period_end?: number }).current_period_end;
-    const periodEnd = periodEndUnix ? new Date(periodEndUnix * 1000) : null;
-
-    const user = await prisma.user.findFirst({ where: { stripeCustomerId: customerId } });
-    if (user) {
-      await prisma.subscription.upsert({
-        where: { stripeSubscriptionId: subId },
-        update: {
-          status,
-          plan,
-          currentPeriodEnd: periodEnd,
-        },
-        create: {
-          userId: user.id,
-          stripeCustomerId: customerId,
-          stripeSubscriptionId: subId,
-          status,
-          plan,
-          currentPeriodEnd: periodEnd,
-        },
-      });
-
-      await prisma.user.update({
-        where: { id: user.id },
-        data: {
-          subscriptionStatus: status,
-          subscriptionPlan: plan,
-        },
-      });
+  try {
+    switch (event.type) {
+      case "checkout.session.completed": {
+        const session = event.data.object as Stripe.Checkout.Session;
+        if (session.mode !== "subscription") break;
+        const rawSub = session.subscription;
+        const subId = typeof rawSub === "string" ? rawSub : rawSub?.id;
+        if (!subId) break;
+        const subscription = await stripe.subscriptions.retrieve(subId);
+        const userId = session.client_reference_id || session.metadata?.userId || null;
+        await syncUserFromStripeSubscription(subscription, userId);
+        break;
+      }
+      case "customer.subscription.created":
+      case "customer.subscription.updated": {
+        const subscription = event.data.object as Stripe.Subscription;
+        await syncUserFromStripeSubscription(subscription, subscription.metadata?.userId || null);
+        break;
+      }
+      case "customer.subscription.deleted": {
+        const subscription = event.data.object as Stripe.Subscription;
+        const customerId =
+          typeof subscription.customer === "string"
+            ? subscription.customer
+            : subscription.customer.id;
+        await markUserFreeAfterSubscriptionRemoved(subscription.id, customerId);
+        break;
+      }
+      default:
+        break;
     }
+  } catch (err) {
+    console.error("[stripe webhook]", event.type, err);
+    return NextResponse.json({ error: "Webhook handler failed" }, { status: 500 });
   }
 
   return NextResponse.json({ received: true });

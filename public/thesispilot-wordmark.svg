@@ -1,0 +1,16 @@
+<svg width="720" height="64" viewBox="0 0 720 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- THESIS -->
+  <path fill="#0B1A2B" d="M0 4h54v8H31v48h-8V12H0z"/>
+  <path fill="#0B1A2B" d="M64 4h8v24h30V4h8v56h-8V36H72v24h-8z"/>
+  <path fill="#0B1A2B" d="M124 4h42v8h-34v16h30v8h-30v16h34v8h-42z"/>
+  <path fill="#0B1A2B" d="M204 4c14 0 24 6 29 16l-8 3c-3-7-10-11-21-11-10 0-17 4-17 10 0 5 4 8 12 9l12 2c13 2 22 8 22 19 0 13-12 22-31 22-16 0-29-7-33-19l8-3c3 8 12 14 25 14 12 0 23-5 23-14 0-6-5-9-13-10l-12-2c-13-2-21-8-21-18 0-12 11-20 25-20z"/>
+  <path fill="#0B1A2B" d="M246 4h8v56h-8z"/>
+  <path fill="#0B1A2B" d="M291 4c14 0 24 6 29 16l-8 3c-3-7-10-11-21-11-10 0-17 4-17 10 0 5 4 8 12 9l12 2c13 2 22 8 22 19 0 13-12 22-31 22-16 0-29-7-33-19l8-3c3 8 12 14 25 14 12 0 23-5 23-14 0-6-5-9-13-10l-12-2c-13-2-21-8-21-18 0-12 11-20 25-20z"/>
+
+  <!-- PILOT -->
+  <path fill="#2B6CFF" fill-opacity="0.56" d="M358 4h29c16 0 27 9 27 23s-11 23-27 23h-21v10h-8zm8 8v30h20c12 0 20-6 20-15s-8-15-20-15z"/>
+  <path fill="#2B6CFF" fill-opacity="0.56" d="M426 4h8v56h-8z"/>
+  <path fill="#2B6CFF" fill-opacity="0.56" d="M446 4h8v48h30v8h-38z"/>
+  <path fill="#2B6CFF" fill-opacity="0.56" fill-rule="evenodd" d="M522 4c20 0 34 12 34 28s-14 28-34 28-34-12-34-28 14-28 34-28zm0 8c-15 0-26 9-26 20s11 20 26 20 26-9 26-20-11-20-26-20z"/>
+  <path fill="#2B6CFF" fill-opacity="0.56" d="M568 4h56v8h-24v48h-8V12h-24z"/>
+</svg>

@@ -232,6 +232,7 @@ export default function ReferenceOutlinePanel({
   const [scholarSearching, setScholarSearching] = useState(false);
   const [scholarResults, setScholarResults] = useState<ScholarListHit[]>([]);
   const [importingPaperId, setImportingPaperId] = useState<string | null>(null);
+  const [referenceCountDelta, setReferenceCountDelta] = useState(0);
   /** Earliest time another academic search is allowed (light client debounce). */
   const [nextS2SearchAt, setNextS2SearchAt] = useState(0);
   /** Bumps once per second while `nextS2SearchAt` is in the future so countdown UI updates. */
@@ -249,10 +250,14 @@ export default function ReferenceOutlinePanel({
     return () => window.clearInterval(id);
   }, [nextS2SearchAt]);
 
-  const canGenerate = useMemo(
-    () => references.length > 0 && prompt.trim().length >= 20,
-    [references.length, prompt],
-  );
+  const effectiveReferenceCount = references.length + referenceCountDelta;
+  const promptWordCount = useMemo(() => prompt.trim().split(/\s+/).filter(Boolean).length, [prompt]);
+  const canGenerate = useMemo(() => {
+    const validByPrompt = promptWordCount >= 8;
+    const validByTitleAndSource = projectTitle.trim().length >= 5 && effectiveReferenceCount >= 1;
+    const validBySources = effectiveReferenceCount >= 3;
+    return validByPrompt || validByTitleAndSource || validBySources;
+  }, [promptWordCount, projectTitle, effectiveReferenceCount]);
   const selectedPages = pages;
   const recommendedReferenceCount = selectedPages * 2;
   const hasEnoughReferences = references.length >= recommendedReferenceCount;
@@ -277,6 +282,10 @@ export default function ReferenceOutlinePanel({
       cancelled = true;
     };
   }, [projectId]);
+
+  useEffect(() => {
+    setReferenceCountDelta(0);
+  }, [references.length]);
 
   function buildComposedPrompt() {
     const settingsBlock = [
@@ -358,6 +367,7 @@ export default function ReferenceOutlinePanel({
     }
 
     const payload = { query, fields, limit: 20 };
+    console.log("[semantic-search] query", payload);
 
     setScholarSearching(true);
     setScholarResults([]);
@@ -387,11 +397,42 @@ export default function ReferenceOutlinePanel({
       }
 
       const papers = json.papers || [];
+      console.log("[semantic-search] results returned", papers.length);
       const hits = papers.map((p, i) => paperResultToHit(p, i));
       setScholarResults(hits);
       setNextS2SearchAt(Date.now() + S2_MIN_GAP_MS);
 
       const hasRealPaper = papers.some((p) => p.source !== "search_guidance");
+      if (hasRealPaper) {
+        const toImport = papers.filter((p) => p.source !== "search_guidance");
+        const importResponse = await fetch(`/api/projects/${projectId}/references/from-paper-search`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ papers: toImport }),
+        });
+        const importJson = (await importResponse.json()) as {
+          error?: string;
+          created?: number;
+          sourceIdsAdded?: string[];
+        };
+        if (!importResponse.ok) {
+          setError(importJson.error || "Import failed after semantic search.");
+        } else {
+          const imported = Number(importJson.created || 0);
+          setReferenceCountDelta((v) => v + imported);
+          console.log("[semantic-search] import summary", {
+            returned: toImport.length,
+            imported,
+            sourceIdsAdded: importJson.sourceIdsAdded || [],
+          });
+          if (imported === toImport.length) {
+            setMessage(`Imported ${imported} sources from semantic search.`);
+          } else {
+            setMessage(`Imported ${imported} of ${toImport.length} sources. Some sources could not be fetched.`);
+          }
+          router.refresh();
+        }
+      }
 
       if (!hasRealPaper) {
         setMessage("No papers found across Semantic Scholar, OpenAlex, Crossref, and arXiv. See search guidance below.");
@@ -409,7 +450,7 @@ export default function ReferenceOutlinePanel({
     setError("");
     setMessage("");
     if (hit.source === "search_guidance") return;
-    if (references.length >= MAX_FILES) {
+    if (effectiveReferenceCount >= MAX_FILES) {
       setError(`You already have ${MAX_FILES} references for this project.`);
       return;
     }
@@ -420,11 +461,16 @@ export default function ReferenceOutlinePanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ papers: [hit.raw] }),
       });
-      const json = (await response.json()) as { error?: string; created?: number };
+      const json = (await response.json()) as { error?: string; created?: number; sourceIdsAdded?: string[] };
       if (!response.ok) {
         setError(json.error || "Import failed.");
         return;
       }
+      console.log("[semantic-search] single import", {
+        imported: json.created || 0,
+        sourceIdsAdded: json.sourceIdsAdded || [],
+      });
+      setReferenceCountDelta((v) => v + Number(json.created || 0));
       setMessage(`Imported ${json.created || 0} papers.`);
       router.refresh();
     } catch {
@@ -449,11 +495,17 @@ export default function ReferenceOutlinePanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ papers: toImport }),
       });
-      const json = (await response.json()) as { error?: string; created?: number };
+      const json = (await response.json()) as { error?: string; created?: number; sourceIdsAdded?: string[] };
       if (!response.ok) {
         setError(json.error || "Import failed.");
         return;
       }
+      console.log("[semantic-search] bulk import", {
+        requested: toImport.length,
+        imported: json.created || 0,
+        sourceIdsAdded: json.sourceIdsAdded || [],
+      });
+      setReferenceCountDelta((v) => v + Number(json.created || 0));
       setMessage(`Imported ${json.created || 0} papers.`);
       router.refresh();
     } catch {
@@ -520,7 +572,7 @@ export default function ReferenceOutlinePanel({
     setError("");
     setMessage("");
     if (!canGenerate) {
-      setError("Upload references first, then write a prompt (at least 20 characters).");
+      setError("Provide either a meaningful prompt (>= 8 words), a project title with one source, or at least 3 sources.");
       return;
     }
     const composedPrompt = buildComposedPrompt();
@@ -556,12 +608,13 @@ export default function ReferenceOutlinePanel({
   async function generateFullDraft() {
     setError("");
     setMessage("");
-    if (prompt.trim().length < 20) {
-      setError("Add a one-prompt instruction (at least 20 characters) before generating full draft.");
-      return;
-    }
-    if (references.length === 0) {
-      setError("Upload references first before generating full draft.");
+    console.log("[full-draft-ui] validation", {
+      promptWords: promptWordCount,
+      effectiveSources: effectiveReferenceCount,
+      canGenerate,
+    });
+    if (!canGenerate) {
+      setError("Provide either a meaningful prompt (>= 8 words), a project title with one source, or at least 3 sources.");
       return;
     }
     const composedPrompt = buildComposedPrompt();
@@ -894,7 +947,7 @@ export default function ReferenceOutlinePanel({
                           <button
                             type="button"
                             onClick={() => void importAllShownPapers()}
-                            disabled={importingPaperId !== null || busy !== null || references.length >= MAX_FILES}
+                            disabled={importingPaperId !== null || busy !== null || effectiveReferenceCount >= MAX_FILES}
                             className="inline-flex items-center gap-2 rounded-full bg-[#176BFF] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 disabled:opacity-45"
                           >
                             {importingPaperId === "__all__" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
@@ -956,7 +1009,7 @@ export default function ReferenceOutlinePanel({
                                   type="button"
                                   onClick={() => void importPaperHit(hit)}
                                   disabled={
-                                    importingPaperId !== null || busy !== null || references.length >= MAX_FILES
+                                    importingPaperId !== null || busy !== null || effectiveReferenceCount >= MAX_FILES
                                   }
                                   className="inline-flex items-center gap-1 rounded-lg bg-[#176BFF] px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:brightness-110 disabled:opacity-45"
                                 >
@@ -1001,11 +1054,11 @@ export default function ReferenceOutlinePanel({
                   rows={2}
                   className="min-h-[52px] flex-1 resize-y rounded-xl border border-slate-200/90 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none ring-0 placeholder:text-slate-500 focus:border-[#176BFF]/40 focus:ring-2 focus:ring-[#176BFF]/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:placeholder:text-slate-400 dark:border-white/12 dark:bg-slate-950/40 dark:text-slate-100 dark:placeholder:text-slate-400 dark:backdrop-blur-md dark:focus:border-sky-400/40 dark:focus:ring-sky-400/12 dark:disabled:bg-slate-950/30 dark:disabled:text-slate-500 dark:disabled:placeholder:text-slate-500"
                   placeholder={
-                    references.length === 0
-                      ? "Upload reference files above, then describe what you want drafted (min. 20 characters)…"
-                      : "Describe scope, chapters, or tone for your thesis draft (min. 20 characters)…"
+                    effectiveReferenceCount === 0
+                      ? "Describe your thesis topic or run semantic search (8+ words is valid)…"
+                      : "Describe scope, chapters, or tone for your thesis draft (8+ words is valid)…"
                   }
-                  disabled={references.length === 0}
+                  disabled={false}
                 />
                 <button
                   type="button"
@@ -1022,6 +1075,9 @@ export default function ReferenceOutlinePanel({
               </div>
               <p className="px-1 text-sm font-medium text-slate-600 dark:text-slate-300">
                 Full draft generation may take 15-60 minutes.
+              </p>
+              <p className="px-1 text-xs font-medium text-slate-500 dark:text-slate-400">
+                Sources available: {effectiveReferenceCount}
               </p>
 
               {busy === "draft" ? (

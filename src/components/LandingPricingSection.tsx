@@ -32,7 +32,7 @@ export default function LandingPricingSection({ variant = "light" }: LandingPric
   return (
     <section className="relative w-full border-t border-slate-200/80 bg-transparent py-28 dark:border-white/[0.06]">
       <div className="mx-auto max-w-6xl px-6">
-        <PricingComparison proCtaHref="/pricing" titleLevel="h2" />
+        <PricingComparison titleLevel="h2" />
       </div>
     </section>
   );

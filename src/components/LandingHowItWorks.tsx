@@ -3,22 +3,22 @@ import { FilePenLine, FileOutput, FileStack, ListTree, type LucideIcon } from "l
 const steps: { n: number; title: string; body: string; Icon: LucideIcon; accent: "dot-bl" | "dash" | "square" | "dot-tr" }[] = [
   {
     n: 1,
-    title: "Upload references",
-    body: "Add papers, notes, PDFs, and source material to your thesis workspace.",
+    title: "Upload sources",
+    body: "Add papers, references, PDFs, notes, and web sources to your thesis workspace.",
     Icon: FileStack,
     accent: "dot-bl",
   },
   {
     n: 2,
-    title: "Generate structure",
-    body: "Turn your sources into a scoped outline with draftable thesis sections.",
+    title: "Generate full thesis",
+    body: "ThesisPilot creates structured chapters with citations, equations, figures, tables, and appendices.",
     Icon: ListTree,
     accent: "dash",
   },
   {
     n: 3,
-    title: "AI supervisor review",
-    body: "An AI supervisor reviews your paragraphs, flags weak claims, and suggests focused rewrites.",
+    title: "Review and refine",
+    body: "Use the AI Supervisor to scope claims, improve logic, add missing citations, and revise weak sections.",
     Icon: FilePenLine,
     accent: "square",
   },
@@ -33,14 +33,14 @@ const steps: { n: number; title: string; body: string; Icon: LucideIcon; accent:
 
 const stats = [
   {
-    value: "3+",
-    headline: "Export formats",
-    detail: "PDF, Markdown, LaTeX",
+    value: "Full",
+    headline: "Thesis draft",
+    detail: "Chapters, citations, figures",
   },
   {
-    value: "4",
-    headline: "Guided steps",
-    detail: "From sources to final draft",
+    value: "4+",
+    headline: "Export formats",
+    detail: "PDF, Markdown, LaTeX, print",
   },
   {
     value: "0",
@@ -109,10 +109,10 @@ export default function LandingHowItWorks() {
     <section className="overflow-hidden border-y border-slate-200/80 py-16 text-slate-900 dark:border-white/[0.06] dark:text-white md:py-20">
       <div className="mx-auto max-w-6xl px-6 text-center">
         <h2 className="text-4xl font-semibold leading-[1.05] tracking-[-0.04em] text-slate-950 dark:text-white sm:text-5xl md:text-6xl">
-          How it works — it&apos;s simple.
+          How it works — from sources to thesis.
         </h2>
         <p className="mx-auto mt-5 max-w-3xl text-lg leading-relaxed text-slate-600 dark:text-slate-400 md:text-xl">
-          References, supervisor feedback, and export — four steps from source material to final thesis.
+          Upload your material, generate a full thesis, refine it with supervisor-style feedback, and export in the format your department expects.
         </p>
 
         <div className="relative mx-auto mt-20 w-full overflow-visible">

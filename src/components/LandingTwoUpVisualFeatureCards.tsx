@@ -133,9 +133,9 @@ export default function LandingTwoUpVisualFeatureCards() {
         <div className="sf-landing-panel-depth__underglow" aria-hidden />
         <div className="sf-landing-panel-depth__topshine" aria-hidden />
         <div className="sf-landing-panel-depth__body flex min-h-0 flex-1 flex-col p-6 md:p-7">
-          <h3 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white md:text-2xl">Revise with structure</h3>
+          <h3 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white md:text-2xl">Refine with AI supervision</h3>
           <p className="mt-3 max-w-prose text-sm leading-relaxed text-slate-600 dark:text-slate-400/95 md:mt-4 md:text-base md:leading-relaxed">
-            ThesisPilot turns vague feedback into clear thesis edits, anchored to the exact paragraph.
+            After generation, ThesisPilot turns vague feedback into targeted edits, anchored comments, and supervisor-style suggestions for specific paragraphs.
           </p>
           <ReviseStructureVisual />
         </div>

@@ -1,0 +1,84 @@
+<svg width="1920" height="900" viewBox="0 0 1920 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="washRight" x1="1140" y1="80" x2="1880" y2="740" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9DDCFF" stop-opacity="0.16"/>
+      <stop offset="0.55" stop-color="#7CCBFF" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#B7E7FF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="washLeft" x1="20" y1="790" x2="780" y2="340" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#B7E7FF" stop-opacity="0.14"/>
+      <stop offset="0.56" stop-color="#9DDCFF" stop-opacity="0.09"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="ribbonA" x1="120" y1="780" x2="1790" y2="250" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#B7E7FF" stop-opacity="0.24"/>
+      <stop offset="0.45" stop-color="#7CCBFF" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#9DDCFF" stop-opacity="0.12"/>
+    </linearGradient>
+    <linearGradient id="ribbonB" x1="80" y1="690" x2="1820" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E8F7FF" stop-opacity="0.28"/>
+      <stop offset="0.52" stop-color="#9DDCFF" stop-opacity="0.19"/>
+      <stop offset="1" stop-color="#7CCBFF" stop-opacity="0.12"/>
+    </linearGradient>
+
+    <linearGradient id="lineBlue" x1="240" y1="760" x2="1730" y2="170" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#B7E7FF" stop-opacity="0.36"/>
+      <stop offset="0.55" stop-color="#7CCBFF" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#9DDCFF" stop-opacity="0.22"/>
+    </linearGradient>
+    <linearGradient id="lineWhite" x1="240" y1="760" x2="1730" y2="170" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.44"/>
+      <stop offset="0.60" stop-color="#FFFFFF" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.2"/>
+    </linearGradient>
+
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+    <filter id="ribbonBlur" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+
+  <!-- pale blue atmospheric fills -->
+  <ellipse cx="1520" cy="360" rx="460" ry="270" fill="url(#washRight)" filter="url(#soft)"/>
+  <ellipse cx="360" cy="770" rx="420" ry="220" fill="url(#washLeft)" filter="url(#soft)"/>
+
+  <!-- large soft wave ribbons crossing lower half -->
+  <path d="M-150 904 C 210 770 530 760 810 606 C 1090 448 1360 306 1740 286 C 1888 276 1980 244 2068 198" stroke="url(#ribbonA)" stroke-width="48" stroke-linecap="round" stroke-linejoin="round" opacity="0.22" filter="url(#ribbonBlur)"/>
+  <path d="M-120 850 C 252 724 560 726 840 578 C 1112 434 1390 298 1750 270 C 1904 260 1998 232 2084 186" stroke="url(#ribbonB)" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" opacity="0.2" filter="url(#ribbonBlur)"/>
+  <path d="M-88 792 C 292 692 590 694 866 548 C 1140 406 1406 286 1762 254 C 1912 246 2010 220 2094 176" stroke="url(#ribbonA)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round" opacity="0.18"/>
+  <path d="M-40 740 C 330 656 626 654 896 516 C 1168 380 1426 270 1778 238 C 1928 230 2024 206 2108 164" stroke="url(#ribbonB)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" opacity="0.15"/>
+
+  <!-- contour cluster from bottom-left toward center-right -->
+  <path d="M160 724 C 470 610 692 604 930 464 C 1182 316 1428 206 1716 206 C 1870 206 1966 184 2052 140" stroke="url(#lineBlue)" stroke-width="3.8" stroke-linecap="round" opacity="0.28"/>
+  <path d="M182 740 C 492 626 714 620 954 482 C 1204 334 1448 224 1736 220 C 1890 218 1988 196 2072 152" stroke="url(#lineBlue)" stroke-width="3.6" stroke-linecap="round" opacity="0.27"/>
+  <path d="M204 756 C 514 640 736 636 978 500 C 1226 350 1466 240 1754 236 C 1910 232 2006 210 2092 166" stroke="url(#lineBlue)" stroke-width="3.4" stroke-linecap="round" opacity="0.26"/>
+  <path d="M226 772 C 536 654 758 652 1002 518 C 1248 368 1488 256 1774 250 C 1928 246 2026 226 2110 182" stroke="url(#lineBlue)" stroke-width="3.2" stroke-linecap="round" opacity="0.25"/>
+  <path d="M248 788 C 558 668 780 668 1026 536 C 1270 384 1508 272 1794 266 C 1948 260 2046 242 2130 198" stroke="url(#lineBlue)" stroke-width="3" stroke-linecap="round" opacity="0.24"/>
+  <path d="M270 804 C 580 682 802 684 1048 554 C 1292 402 1528 288 1814 282 C 1968 276 2064 258 2150 214" stroke="url(#lineBlue)" stroke-width="2.8" stroke-linecap="round" opacity="0.23"/>
+  <path d="M292 820 C 602 696 824 700 1070 570 C 1312 418 1548 304 1834 296 C 1986 292 2084 274 2170 230" stroke="url(#lineBlue)" stroke-width="2.7" stroke-linecap="round" opacity="0.22"/>
+  <path d="M314 836 C 624 710 846 716 1094 588 C 1334 436 1568 320 1854 312 C 2008 306 2104 290 2192 246" stroke="url(#lineBlue)" stroke-width="2.6" stroke-linecap="round" opacity="0.21"/>
+  <path d="M336 850 C 646 724 868 730 1118 602 C 1354 452 1588 334 1874 326 C 2028 320 2126 306 2212 264" stroke="url(#lineBlue)" stroke-width="2.5" stroke-linecap="round" opacity="0.2"/>
+  <path d="M358 864 C 668 738 890 744 1140 618 C 1374 468 1606 350 1892 342 C 2048 334 2146 322 2232 280" stroke="url(#lineBlue)" stroke-width="2.4" stroke-linecap="round" opacity="0.19"/>
+  <path d="M380 876 C 690 750 912 758 1162 632 C 1392 484 1624 366 1910 356 C 2066 350 2166 338 2252 298" stroke="url(#lineBlue)" stroke-width="2.3" stroke-linecap="round" opacity="0.18"/>
+  <path d="M402 888 C 712 762 934 772 1186 646 C 1412 500 1642 380 1930 372 C 2088 364 2186 354 2274 314" stroke="url(#lineBlue)" stroke-width="2.2" stroke-linecap="round" opacity="0.17"/>
+
+  <!-- subtle white highlights over contour lines -->
+  <path d="M200 710 C 510 598 728 592 964 454 C 1210 314 1454 212 1742 210 C 1898 208 1994 186 2078 144" stroke="url(#lineWhite)" stroke-width="2.8" stroke-linecap="round" opacity="0.24"/>
+  <path d="M236 748 C 544 634 760 630 998 492 C 1242 350 1482 242 1770 238 C 1924 236 2020 214 2106 170" stroke="url(#lineWhite)" stroke-width="2.4" stroke-linecap="round" opacity="0.22"/>
+  <path d="M272 784 C 576 670 792 666 1032 530 C 1272 386 1512 272 1798 268 C 1952 266 2048 246 2134 202" stroke="url(#lineWhite)" stroke-width="2.1" stroke-linecap="round" opacity="0.2"/>
+  <path d="M308 820 C 610 706 822 704 1066 566 C 1304 422 1542 304 1828 298 C 1982 296 2078 278 2164 234" stroke="url(#lineWhite)" stroke-width="1.9" stroke-linecap="round" opacity="0.18"/>
+  <path d="M344 854 C 642 740 854 740 1100 602 C 1336 456 1572 336 1858 330 C 2012 328 2108 312 2194 268" stroke="url(#lineWhite)" stroke-width="1.7" stroke-linecap="round" opacity="0.16"/>
+
+  <!-- right-side contour cluster -->
+  <g opacity="0.24">
+    <path d="M1280 -20 C 1458 64 1576 152 1672 278 C 1766 402 1844 546 2006 644" stroke="url(#lineBlue)" stroke-width="2.4"/>
+    <path d="M1246 -30 C 1428 56 1548 146 1644 276 C 1738 402 1816 546 1978 650" stroke="url(#lineBlue)" stroke-width="2.2"/>
+    <path d="M1210 -42 C 1396 48 1518 142 1616 274 C 1708 400 1788 548 1948 656" stroke="url(#lineBlue)" stroke-width="2"/>
+    <path d="M1178 -52 C 1368 42 1490 138 1588 274 C 1682 402 1758 548 1918 662" stroke="url(#lineBlue)" stroke-width="1.8"/>
+    <path d="M1148 -64 C 1340 36 1464 134 1562 272 C 1658 404 1734 550 1892 666" stroke="url(#lineBlue)" stroke-width="1.6"/>
+    <path d="M1120 -74 C 1312 30 1438 132 1536 272 C 1632 406 1710 552 1866 672" stroke="url(#lineBlue)" stroke-width="1.5"/>
+  </g>
+</svg>

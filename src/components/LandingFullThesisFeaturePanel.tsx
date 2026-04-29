@@ -16,7 +16,7 @@ export default function LandingFullThesisFeaturePanel() {
         <div className="text-left">
           <h2 className={landingFeaturePanelTitle}>Full thesis generation</h2>
           <p className={landingFeaturePanelSubtitle}>
-            ThesisPilot turns your assigned papers and references into a structured thesis draft you can revise with an AI supervisor.
+            ThesisPilot turns your uploaded sources into a structured BSc or MSc thesis draft, including citations, equations, figures, tables, appendices, and export-ready formatting.
           </p>
         </div>
 
@@ -46,15 +46,21 @@ export default function LandingFullThesisFeaturePanel() {
                       Source grounded
                     </span>
                     <span className="rounded border border-amber-400/30 bg-amber-500/[0.1] px-1.5 py-px text-[8px] font-semibold uppercase tracking-wide text-amber-100/90">
-                      Citation needed
+                      Citations included
                     </span>
                     <span className="rounded border border-cyan-400/28 bg-cyan-500/[0.1] px-1.5 py-px text-[8px] font-semibold uppercase tracking-wide text-cyan-100/90">
-                      Supervisor note
+                      STEM ready
+                    </span>
+                    <span className="rounded border border-indigo-400/28 bg-indigo-500/[0.1] px-1.5 py-px text-[8px] font-semibold uppercase tracking-wide text-indigo-100/90">
+                      Figures + tables
+                    </span>
+                    <span className="rounded border border-violet-400/28 bg-violet-500/[0.1] px-1.5 py-px text-[8px] font-semibold uppercase tracking-wide text-violet-100/90">
+                      Math notation
                     </span>
                   </div>
 
                   <div className="rounded-lg border border-sky-500/20 bg-sky-950/25 px-2.5 py-1.5 ring-1 ring-cyan-400/15">
-                    <p className="text-[10px] font-bold tracking-tight text-cyan-100 md:text-[11px]">Chapter 2: Literature Review</p>
+                    <p className="text-[10px] font-bold tracking-tight text-cyan-100 md:text-[11px]">Chapter 3: Methodology</p>
                   </div>
 
                   <div className="mt-2.5 space-y-1.5">
@@ -74,7 +80,7 @@ export default function LandingFullThesisFeaturePanel() {
                       <span className="text-[9px] font-bold uppercase tracking-wide text-sky-300/95">Supervisor</span>
                     </div>
                     <p className="mt-1.5 text-[9px] leading-snug text-slate-200 md:text-[10px] md:leading-snug">
-                      Strengthen this paragraph by linking Chen et al. (2024) to your research question.
+                      Strengthen this section by linking the model specification to your research question and cited sources.
                     </p>
                   </div>
                 </div>
@@ -84,7 +90,7 @@ export default function LandingFullThesisFeaturePanel() {
         </div>
 
         <p className="mt-3 text-right text-[10px] leading-snug text-slate-500/95 md:text-[11px]">
-          Generate, revise, and export — with references still in the loop.
+          Generate, revise, and export — with your sources still in the loop.
         </p>
       </LandingFeaturePanelShell>
     </section>

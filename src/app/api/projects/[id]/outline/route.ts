@@ -15,7 +15,7 @@ import {
 } from "@/lib/ai-config";
 
 const bodySchema = z.object({
-  prompt: z.string().min(20),
+  prompt: z.string().min(8),
 });
 
 const OUTLINE_MAX_OUTPUT_TOKENS = 950;
@@ -290,9 +290,16 @@ export async function POST(
     orderBy: { createdAt: "desc" },
   });
 
-  if (papers.length === 0) {
-    return NextResponse.json({ error: "Upload at least one reference paper first." }, { status: 400 });
+  const promptWords = parsed.data.prompt.trim().split(/\s+/).filter(Boolean).length;
+  if (papers.length === 0 && promptWords < 8) {
+    return NextResponse.json({ error: "Provide a meaningful prompt (at least 8 words) or add sources first." }, { status: 400 });
   }
+  console.log("[outline] validation", {
+    projectId: id,
+    promptWords,
+    sourceCount: papers.length,
+    pass: promptWords >= 8 || papers.length > 0,
+  });
 
   const usageCheck = await ensureUsageAllowed(session.user.id);
   if (!usageCheck.allowed) {

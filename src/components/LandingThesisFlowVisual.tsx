@@ -18,15 +18,15 @@ export default function LandingThesisFlowVisual() {
     { label: "PDF / Notes", icon: "📝", rotate: "-rotate-[4deg]" },
   ];
 
-  const chapters = ["Introduction", "Literature Review", "Methodology"];
+  const chapters = ["Introduction", "Literature Review", "Methodology", "Results", "Appendices"];
 
   return (
     <section className={landingFeaturePanelSection}>
       <LandingFeaturePanelShell>
         <div className="text-left">
-          <h2 className={landingFeaturePanelTitle}>Generate a full thesis from your papers.</h2>
+          <h2 className={landingFeaturePanelTitle}>Generate a full academic thesis from your sources.</h2>
           <p className={landingFeaturePanelSubtitle}>
-            Upload your assigned paper and references, then revise the AI-generated thesis with your supervisor chat beside it.
+            Upload assigned papers, references, PDFs, notes, and web sources. ThesisPilot builds a complete thesis draft with structured chapters, citations, equations, tables, figures, and appendices.
           </p>
         </div>
 
@@ -118,7 +118,7 @@ function AiNode() {
             </span>
             <span className="text-[11px] font-semibold tracking-tight text-white md:text-xs">AI Generating Thesis…</span>
           </div>
-          <p className="mt-0.5 text-center text-[9px] font-medium text-cyan-100/75 md:text-[10px]">Analyzing • Structuring • Writing</p>
+          <p className="mt-0.5 text-center text-[9px] font-medium text-cyan-100/75 md:text-[10px]">Analyzing • Structuring • Citing • Writing</p>
         </div>
       </div>
     </div>
@@ -151,16 +151,19 @@ function OutputPair({ chapters }: { chapters: string[] }) {
           <h3 className="text-[11px] font-bold text-white">AI Supervisor</h3>
           <span className="flex items-center gap-1 text-[8px] font-semibold text-emerald-300/90">
             <span className="h-1 w-1 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.7)]" />
-            Online
+            Reviewing
           </span>
         </div>
         <div className="mt-2 space-y-1.5">
           <div className="max-w-[94%] rounded-lg rounded-tl-sm border border-cyan-400/12 bg-cyan-950/30 px-2 py-1.5">
             <span className="text-[8px] text-cyan-300/90">✦</span>
-            <p className="mt-0.5 text-[9px] leading-snug text-slate-300">Narrow your research question to match your lit review.</p>
+            <p className="mt-0.5 text-[9px] leading-snug text-slate-300">Narrow this claim to match the cited evidence.</p>
           </div>
           <div className="ml-auto max-w-[88%] rounded-lg rounded-tr-sm border border-white/10 bg-slate-800/45 px-2 py-1.5">
-            <p className="text-[9px] leading-snug text-slate-400">One measurable outcome from Chen et al.?</p>
+            <p className="text-[9px] leading-snug text-slate-400">Add one primary citation before expanding this argument.</p>
+          </div>
+          <div className="max-w-[90%] rounded-lg rounded-tl-sm border border-cyan-400/12 bg-cyan-950/30 px-2 py-1.5">
+            <p className="text-[9px] leading-snug text-slate-300">Turn this into a testable hypothesis.</p>
           </div>
         </div>
         <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-white/[0.07] bg-slate-950/50 px-2 py-1.5">

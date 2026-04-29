@@ -17,6 +17,162 @@ function sanitizeFilename(input: string) {
   return input.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_").slice(0, 64) || "scholarflow_draft";
 }
 
+function normalizeHeadingKey(input: string) {
+  return input
+    .toLowerCase()
+    .replace(/\(continued\)/gi, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanHeadingTitle(input: string) {
+  return input.replace(/\(continued\)/gi, "").replace(/\s+/g, " ").trim();
+}
+
+function repairDuplicateLevel(body: string, level: "section" | "subsection"): {
+  repaired: string;
+  changed: boolean;
+  duplicates: string[];
+  headings: string[];
+} {
+  const re = level === "section" ? /\\section\*?\{([^}]+)\}/g : /\\subsection\*?\{([^}]+)\}/g;
+  let m: RegExpExecArray | null;
+  const matches: Array<{ start: number; end: number; title: string }> = [];
+  while ((m = re.exec(body)) !== null) {
+    matches.push({ start: m.index, end: m.index + m[0].length, title: m[1] || "" });
+  }
+  if (matches.length === 0) {
+    return { repaired: body, changed: false, duplicates: [], headings: [] };
+  }
+
+  const prefix = body.slice(0, matches[0].start).trim();
+  const blocks: Array<{ title: string; content: string }> = [];
+  for (let i = 0; i < matches.length; i++) {
+    const cur = matches[i];
+    const nextStart = i + 1 < matches.length ? matches[i + 1].start : body.length;
+    blocks.push({
+      title: cleanHeadingTitle(cur.title),
+      content: body.slice(cur.end, nextStart).trim(),
+    });
+  }
+
+  const merged: Array<{ title: string; key: string; content: string }> = [];
+  const keyToIndex = new Map<string, number>();
+  const duplicates = new Set<string>();
+  for (const b of blocks) {
+    const key = normalizeHeadingKey(b.title);
+    if (!key) continue;
+    if (!keyToIndex.has(key)) {
+      keyToIndex.set(key, merged.length);
+      merged.push({ title: b.title, key, content: b.content });
+    } else {
+      duplicates.add(b.title);
+      const idx = keyToIndex.get(key)!;
+      merged[idx].content = [merged[idx].content, b.content].filter(Boolean).join("\n\n");
+    }
+  }
+
+  const headingCmd = level === "section" ? "\\section" : "\\subsection";
+  const rebuilt = [
+    prefix,
+    ...merged.map((b) => `${headingCmd}{${b.title}}\n${b.content}`.trim()),
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+
+  const changed = rebuilt !== body || duplicates.size > 0 || /\(continued\)/i.test(body);
+  return {
+    repaired: rebuilt,
+    changed,
+    duplicates: [...duplicates],
+    headings: merged.map((b) => b.title),
+  };
+}
+
+function repairDuplicateHeadingsInChapter(body: string) {
+  // First repair section-level duplicates; then repair subsection duplicates within each section block.
+  const sec = repairDuplicateLevel(body, "section");
+  const sectionRe = /\\section\*?\{([^}]+)\}/g;
+  let m: RegExpExecArray | null;
+  const starts: Array<{ start: number; end: number; title: string }> = [];
+  while ((m = sectionRe.exec(sec.repaired)) !== null) {
+    starts.push({ start: m.index, end: m.index + m[0].length, title: m[1] || "" });
+  }
+  if (starts.length === 0) {
+    return {
+      repaired: sec.repaired,
+      changed: sec.changed,
+      duplicateHeadings: sec.duplicates,
+      finalHeadings: sec.headings,
+    };
+  }
+
+  const prefix = sec.repaired.slice(0, starts[0].start).trim();
+  const chunks: string[] = [];
+  const duplicates = new Set<string>(sec.duplicates);
+  const finalHeadings: string[] = [];
+  for (let i = 0; i < starts.length; i++) {
+    const cur = starts[i];
+    const nextStart = i + 1 < starts.length ? starts[i + 1].start : sec.repaired.length;
+    const sectionHeader = sec.repaired.slice(cur.start, cur.end);
+    const sectionBody = sec.repaired.slice(cur.end, nextStart).trim();
+    const sub = repairDuplicateLevel(sectionBody, "subsection");
+    for (const d of sub.duplicates) duplicates.add(d);
+    finalHeadings.push(cleanHeadingTitle(cur.title), ...sub.headings.map((h) => `  - ${h}`));
+    chunks.push(`${sectionHeader}\n${sub.repaired}`.trim());
+  }
+
+  const repaired = [prefix, ...chunks].filter(Boolean).join("\n\n").trim();
+  return {
+    repaired,
+    changed: sec.changed || repaired !== body,
+    duplicateHeadings: [...duplicates],
+    finalHeadings,
+  };
+}
+
+type ParsedSourceMeta = {
+  title?: string;
+  authors?: string;
+  year?: string;
+  doi?: string;
+  url?: string;
+};
+
+function parseSourceMeta(text: string): ParsedSourceMeta | null {
+  if (!text.includes("[ACADEMIC_REFERENCE_METADATA]")) return null;
+  const pick = (key: string) => text.match(new RegExp(`\\n${key}:\\s*(.+)\\s*$`, "mi"))?.[1]?.trim();
+  const title = pick("title");
+  const authors = pick("authors");
+  const year = pick("year");
+  const doi = pick("doi");
+  const url = pick("url");
+  return { title, authors, year, doi, url };
+}
+
+function hasExportRegressionArtifacts(args: {
+  title: string;
+  chapters: { title: string; content: string }[];
+  abstractLatex?: string | null;
+  importedMetaCount: number;
+}) {
+  const allBody = [args.abstractLatex || "", ...args.chapters.map((c) => c.content)].join("\n\n");
+  const intro = args.chapters[0]?.content || "";
+  const reasons: string[] = [];
+  if (/^\s*thesis\s*title\s*$/i.test(args.title.trim())) reasons.push("placeholder_title");
+  if (/```latex|```/i.test(allBody)) reasons.push("markdown_code_fence");
+  if (/\(author\?\)/i.test(allBody)) reasons.push("author_placeholder");
+  if (/Figure~(?!\\ref\{)/.test(allBody)) reasons.push("dangling_figure_ref");
+  if (/\\cite[pt]?\{\s*\}/.test(allBody) || /\[\s*\]/.test(allBody)) reasons.push("blank_citation");
+  if ((intro.match(/\\subsection\*?\{/g) || []).length < 1) reasons.push("intro_missing_subsections");
+  const wordCount = latexToPlainishStructured(allBody).split(/\s+/).filter(Boolean).length;
+  if (wordCount < 1800) reasons.push("too_short");
+  if (args.importedMetaCount > 0 && args.importedMetaCount < 5) reasons.push("insufficient_imported_references");
+  return reasons;
+}
+
 function sectionsFromLiveDraft(content: string) {
   const trimmed = content.trim();
   if (!trimmed) return [];
@@ -329,7 +485,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   const abstractLatex = draftAbstract?.content?.trim() || null;
 
   const hasLiveDraft = Boolean(liveDraft?.content && liveDraft.content.trim().length >= 120);
-  const sections = hasLiveDraft
+  const rawSections = hasLiveDraft
     ? sectionsFromLiveDraft(liveDraft!.content)
     : draftSections.length > 0
       ? draftSections
@@ -339,15 +495,31 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
           select: { title: true, content: true },
         });
 
-  if (sections.length === 0) {
+  if (rawSections.length === 0) {
     return NextResponse.json({ error: "No sections available to export yet." }, { status: 400 });
   }
+
+  const repairedSections = rawSections.map((section) => {
+    const repaired = repairDuplicateHeadingsInChapter(section.content);
+    if (repaired.changed) {
+      console.log("[export] duplicate heading detected", {
+        chapter: section.title,
+        duplicates: repaired.duplicateHeadings,
+        action: "merged duplicate headings and removed '(continued)'",
+        finalHeadings: repaired.finalHeadings,
+      });
+    }
+    return {
+      ...section,
+      content: repaired.repaired,
+    };
+  });
 
   if (format === "pdf" || format === "tex" || format === "latex") {
     const tech = projectUsesEarlyChapterMathDelay(project.field);
     const placeholderIssues = auditCombinedThesisBodies({
       abstractLatex: abstractLatex || "",
-      chapters: sections,
+      chapters: repairedSections,
     });
     if (placeholderIssues.length > 0) {
       return NextResponse.json(
@@ -360,12 +532,12 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       );
     }
 
-    const bodiesJoined = sections.map((s) => s.content).join("\n\n");
+    const bodiesJoined = repairedSections.map((s) => s.content).join("\n\n");
     const tikzCount = countTikzOrPgfplotsFigures(bodiesJoined);
     if (tech && tikzCount >= 5) {
       const hqIssues = auditHighQualityFinalGate({
         abstractLatex: abstractLatex || "",
-        drafts: sections,
+        drafts: repairedSections,
         technicalPipeline: tech,
       });
       if (hqIssues.length > 0) {
@@ -380,7 +552,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     }
 
     const issues = auditAggregatedDraft({
-      drafts: sections,
+      drafts: repairedSections,
       abstractLatex: abstractLatex || "",
       technicalPipeline: tech,
     });
@@ -392,7 +564,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   const safeName = sanitizeFilename(project.title || "scholarflow_draft");
 
   if (format === "md") {
-    const body = buildMarkdownDocument(project.title, sections);
+    const body = buildMarkdownDocument(project.title, repairedSections);
     return new NextResponse(body, {
       headers: {
         "Content-Type": "text/markdown; charset=utf-8",
@@ -402,7 +574,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   }
 
   if (format === "rtf" || format === "word") {
-    const rtf = buildRtfDocument(project.title, sections);
+    const rtf = buildRtfDocument(project.title, repairedSections);
     return new NextResponse(rtf, {
       headers: {
         "Content-Type": "application/rtf; charset=utf-8",
@@ -422,10 +594,10 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
         prisma.referencePaper.findMany({
           where: { projectId: id },
           orderBy: { createdAt: "asc" },
-          select: { originalName: true },
+          select: { originalName: true, extractedText: true },
         }),
       ])
-    : [null, [] as { originalName: string }[]];
+    : [null, [] as { originalName: string; extractedText: string }[]];
 
   const authorName =
     (dbUser?.name?.trim() ||
@@ -435,7 +607,39 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       "Author")
       .trim() || "Author";
 
-  const uploadedSourceNames = referencePapers.map((p) => p.originalName);
+  const parsedMeta = referencePapers.map((p) => parseSourceMeta(p.extractedText)).filter((v): v is ParsedSourceMeta => Boolean(v));
+  const uploadedSourceNames = referencePapers.map((p, idx) => {
+    const m = parseSourceMeta(p.extractedText);
+    if (!m?.title) return p.originalName;
+    const authors = m.authors?.trim() ? m.authors : "Citation details incomplete";
+    const year = m.year?.trim() ? m.year : "n.d.";
+    const doiOrUrl = m.doi?.trim() ? `DOI: ${m.doi}` : m.url?.trim() ? `URL: ${m.url}` : "Citation details incomplete";
+    return `[${idx + 1}] ${authors} (${year}). ${m.title}. ${doiOrUrl}`;
+  });
+
+  if (format === "pdf" || format === "tex" || format === "latex") {
+    const gateReasons = hasExportRegressionArtifacts({
+      title: project.title,
+      chapters: repairedSections,
+      abstractLatex,
+      importedMetaCount: parsedMeta.length,
+    });
+    console.log("[export] quality gate", {
+      projectId: id,
+      importedMetaCount: parsedMeta.length,
+      pass: gateReasons.length === 0,
+      reasons: gateReasons,
+    });
+    if (gateReasons.length > 0) {
+      return NextResponse.json(
+        {
+          error: "Thesis export blocked by quality gate. Regenerate to fix malformed content and citations.",
+          reasons: gateReasons,
+        },
+        { status: 422 },
+      );
+    }
+  }
 
   if (format === "tex" || format === "latex") {
     const latex = buildThesisLatexDocument(
@@ -449,7 +653,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
         authorName,
         uploadedSourceNames,
       },
-      sections,
+      repairedSections,
       "pdflatex",
       { abstractLatex },
     );
@@ -462,7 +666,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   }
 
   if (format === "tex-simple" || format === "tex-article") {
-    const latex = buildSimpleArticleLatexDocument(project.title, sections);
+    const latex = buildSimpleArticleLatexDocument(project.title, repairedSections);
     return new NextResponse(latex, {
       headers: {
         "Content-Type": "application/x-tex; charset=utf-8",
@@ -482,13 +686,13 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       authorName,
       uploadedSourceNames,
     };
-    const texTectonic = buildThesisLatexDocument(thesisMeta, sections, "tectonic", { abstractLatex });
-    const texPdflatex = buildThesisLatexDocument(thesisMeta, sections, "pdflatex", { abstractLatex });
-    const texTectonicSafe = buildThesisLatexDocument(thesisMeta, sections, "tectonic", {
+    const texTectonic = buildThesisLatexDocument(thesisMeta, repairedSections, "tectonic", { abstractLatex });
+    const texPdflatex = buildThesisLatexDocument(thesisMeta, repairedSections, "pdflatex", { abstractLatex });
+    const texTectonicSafe = buildThesisLatexDocument(thesisMeta, repairedSections, "tectonic", {
       forcePlainBodies: true,
       abstractLatex,
     });
-    const texPdflatexSafe = buildThesisLatexDocument(thesisMeta, sections, "pdflatex", {
+    const texPdflatexSafe = buildThesisLatexDocument(thesisMeta, repairedSections, "pdflatex", {
       forcePlainBodies: true,
       abstractLatex,
     });
@@ -542,7 +746,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
         authorName,
         uploadedSourceNames,
       },
-      sections,
+      repairedSections,
       abstractLatex,
     );
     return new NextResponse(Buffer.from(pdfBytes), {
@@ -554,7 +758,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     });
   }
 
-  const textBody = buildTextDocument(project.title, sections);
+  const textBody = buildTextDocument(project.title, repairedSections);
   return new NextResponse(textBody, {
     headers: {
       "Content-Type": "text/plain; charset=utf-8",

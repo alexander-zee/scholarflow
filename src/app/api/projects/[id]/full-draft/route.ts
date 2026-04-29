@@ -63,7 +63,7 @@ import {
 import { injectHighQualityFiguresAndTables } from "@/lib/thesis-figures-tables";
 
 const bodySchema = z.object({
-  prompt: z.string().min(20),
+  prompt: z.string().min(8),
   highQualityThesis: z.boolean().optional(),
 });
 
@@ -77,6 +77,53 @@ const MAX_SECTION_EXPANSION_PASSES = 2;
 const MAX_STRUCTURE_REPAIR_PASSES = 2;
 const MAX_ABSTRACT_EXPANSION_PASSES = 2;
 const MAX_QUALITY_REPAIR_PASSES = 2;
+
+function countPromptWords(input: string) {
+  return input.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function looksPlaceholderTitle(input: string) {
+  return /^(thesis\s*title|title|untitled|new project|placeholder)$/i.test(input.trim());
+}
+
+function toTitleCase(input: string) {
+  return input
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ")
+    .slice(0, 120);
+}
+
+function inferProjectTitleFromPrompt(prompt: string): string {
+  const p = prompt.trim().replace(/[.?!]+$/, "");
+  if (!p) return "Academic Research Thesis";
+  if (/^machine learning in the /i.test(p)) {
+    const topic = p.replace(/^machine learning in the /i, "").trim();
+    return `Machine Learning Applications in the ${toTitleCase(topic)}`.slice(0, 120);
+  }
+  return toTitleCase(p);
+}
+
+function hasUploadedDatasetFilenames(names: string[]) {
+  return names.some((n) => /\.(csv|xlsx|xls|json|parquet|tsv)\b/i.test(n));
+}
+
+function hasCanonicalFiveChapterCoverage(outline: OutlineSection[]) {
+  const kinds = new Set(outline.map((o) => inferThesisChapterKind(o.title)));
+  return ["introduction", "literature", "methodology", "results", "discussion"].every((k) => kinds.has(k as ThesisChapterKind));
+}
+
+function canonicalFiveChapterOutline(): OutlineSection[] {
+  return [
+    { title: "Chapter 1 Introduction", purpose: "Frame background, problem, objective, contribution, limits, and thesis structure." },
+    { title: "Chapter 2 Literature Review", purpose: "Synthesize relevant literature, identify gaps, and define positioning." },
+    { title: "Chapter 3 Methodology", purpose: "Present data strategy, model design, and empirical/analytical approach." },
+    { title: "Chapter 4 Results and Analysis", purpose: "Present analysis outputs and interpretation without unsupported claims." },
+    { title: "Chapter 5 Discussion and Conclusion", purpose: "Conclude contributions, limitations, and future research directions." },
+  ];
+}
 
 type OutlineSubsection = {
   title: string;
@@ -323,6 +370,7 @@ Reference excerpts (may be partial):
 ${args.references}
 
 ${THESIS_CITATION_RULES}
+- Prefer numbered citation placeholders [1], [2], [3] in prose when source metadata exists.
 ${abstractMathPolicy}
 Output valid LaTeX paragraphs (\\textbf{} / \\emph{} allowed). No \\chapter.
 `.trim();
@@ -423,6 +471,7 @@ function buildSectionPrompt(args: {
   technicalPipeline: boolean;
   thesisBlueprint?: string;
   highQualityThesis?: boolean;
+  hasDataset?: boolean;
 }) {
   const hierarchy = (args.section.sections && args.section.sections.length > 0 ? args.section.sections : buildFallbackHierarchy(args.section))
     .map((sec, i) => {
@@ -468,6 +517,14 @@ Section writing standard (high-quality):
 - In empirical Results subsections: what is estimated or shown; headline result; statistical interpretation; substantive interpretation; limitation or caution.
 `.trim()
     : "";
+  const noDatasetBlock = args.hasDataset
+    ? ""
+    : `
+Dataset availability constraint:
+- No structured dataset upload was detected.
+- Do NOT invent empirical coefficients, sample sizes, p-values, benchmark scores, or "observed" results.
+- Write as literature-grounded analysis with a proposed empirical strategy, expected analytical outcomes, and explicit limitations.
+`.trim();
   const skeletonBlock = args.skeleton.trim()
     ? `\nMandatory skeleton — preserve every \\section, \\subsection, and \\subsubsection heading from the skeleton in order; replace each intent line (\\textit{...}) with full scholarly prose under that heading:\n${args.skeleton.trim()}\n`
     : "";
@@ -505,8 +562,10 @@ ${chapterGuidanceBlock}
 ${hqIntroBlock}
 ${blueprintBlock}
 ${flowBlock}
+${noDatasetBlock}
 ${mathRulesBlock}
 ${THESIS_CITATION_RULES}
+- Prefer numbered citation placeholders [1], [2], [3] in prose when source metadata exists.
 
 ${THESIS_FILLER_BAN}
 ${figureRulesBlock}
@@ -719,6 +778,15 @@ State methodological limits and transition to the next chapter.
 \\textit{${escapeLatex(integrityNotice)}}`;
 }
 
+function stripMarkdownLatexArtifacts(input: string): string {
+  return input
+    .replace(/```latex/gi, "")
+    .replace(/```/g, "")
+    .replace(/\(author\?\)/gi, "")
+    .replace(/Figure~(?!\\ref\{)/g, "Figure ")
+    .trim();
+}
+
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -736,17 +804,46 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return NextResponse.json({ error: "Invalid prompt." }, { status: 400 });
   }
 
+  const promptTopic = payload.data.prompt.trim().replace(/[.?!]+$/, "");
+  const promptWords = countPromptWords(promptTopic);
+
+  const papers = await prisma.referencePaper.findMany({
+    where: { projectId: id },
+    orderBy: { createdAt: "desc" },
+  });
+
+  const inferredTitle =
+    project.title.trim().length >= 5 && !looksPlaceholderTitle(project.title)
+      ? project.title.trim()
+      : inferProjectTitleFromPrompt(promptTopic || "research topic");
+  const inferredField = project.field.trim().length >= 3 ? project.field.trim() : "Academic research";
+  const inferredResearchQuestion =
+    project.researchQuestion.trim().length >= 12
+      ? project.researchQuestion.trim()
+      : `How does ${promptTopic || "this topic"} relate to current academic literature and practical applications?`;
+
   const highQualityThesis = detectHighQualityThesisMode({
     highQualityFlag: payload.data.highQualityThesis,
     prompt: payload.data.prompt,
   });
 
   const inputIssues = validateThesisUserInputs({
-    title: project.title,
-    field: project.field,
-    researchQuestion: project.researchQuestion,
+    title: inferredTitle,
+    field: inferredField,
+    researchQuestion: inferredResearchQuestion,
     description: project.description,
     userPrompt: payload.data.prompt,
+    sourceCount: papers.length,
+  });
+  console.log("[full-draft] validation", {
+    projectId: id,
+    prompt: payload.data.prompt,
+    inferredTitle,
+    inferredField,
+    inferredResearchQuestion,
+    promptWords,
+    sources: papers.length,
+    issues: inputIssues.map((i) => i.code),
   });
   if (inputIssues.length > 0) {
     return NextResponse.json(
@@ -771,12 +868,19 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     );
   }
 
-  const papers = await prisma.referencePaper.findMany({
-    where: { projectId: id },
-    orderBy: { createdAt: "desc" },
-  });
-  if (papers.length === 0) {
-    return NextResponse.json({ error: "Upload at least one reference paper first." }, { status: 400 });
+  if (papers.length === 0 && promptWords < 8) {
+    return NextResponse.json({ error: "Provide a meaningful prompt (at least 8 words) or import sources first." }, { status: 400 });
+  }
+
+  if (project.title !== inferredTitle || project.field !== inferredField || project.researchQuestion !== inferredResearchQuestion) {
+    await prisma.project.update({
+      where: { id },
+      data: {
+        title: inferredTitle,
+        field: inferredField,
+        researchQuestion: inferredResearchQuestion,
+      },
+    });
   }
 
   const usageCheck = await ensureUsageAllowed(session.user.id);
@@ -793,7 +897,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     select: { title: true, content: true },
   });
 
-  const outlineSections = parseOutlineSections(outlineRows);
+  let outlineSections = parseOutlineSections(outlineRows);
+  if (!hasCanonicalFiveChapterCoverage(outlineSections)) {
+    outlineSections = canonicalFiveChapterOutline();
+  }
   if (outlineSections.length === 0) {
     return NextResponse.json(
       { error: "Generate an outline first before creating full draft chapters." },
@@ -808,7 +915,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const drafts: { title: string; content: string }[] = [];
 
   const composedGlobalPrompt = payload.data.prompt;
-  const technical = projectUsesEarlyChapterMathDelay(project.field);
+  const technical = projectUsesEarlyChapterMathDelay(inferredField);
+  const hasDataset = hasUploadedDatasetFilenames(papers.map((p) => p.originalName || ""));
 
   let thesisBlueprint = "";
   if (highQualityThesis) {
@@ -816,10 +924,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       await openAiThesisText(
         buildBlueprintPrompt({
           project: {
-            title: project.title,
-            field: project.field,
+            title: inferredTitle,
+            field: inferredField,
             degreeLevel: project.degreeLevel,
-            researchQuestion: project.researchQuestion,
+            researchQuestion: inferredResearchQuestion,
             description: project.description,
           },
           chapterTitles: scaledSections.map((s) => s.title),
@@ -843,11 +951,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     await openAiThesisText(
       buildAbstractPrompt({
         project: {
-          title: project.title,
-          field: project.field,
+          title: inferredTitle,
+          field: inferredField,
           degreeLevel: project.degreeLevel,
           language: project.language,
-          researchQuestion: project.researchQuestion,
+          researchQuestion: inferredResearchQuestion,
           description: project.description,
         },
         globalPrompt: composedGlobalPrompt,
@@ -857,6 +965,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       abstractMaxTok,
     ),
   );
+  abstractLatex = stripMarkdownLatexArtifacts(abstractLatex);
   let abstractIssue = auditAbstractLatex(abstractLatex, { technicalPipeline: technical });
   let abstractPass = 0;
   while (abstractIssue && abstractPass < maxAbstractExpansionPasses) {
@@ -874,7 +983,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     abstractPass += 1;
   }
   if (auditAbstractLatex(abstractLatex, { technicalPipeline: technical })) {
-    abstractLatex = buildFallbackAbstractLatex(project);
+    abstractLatex = buildFallbackAbstractLatex({
+      ...project,
+      title: inferredTitle,
+      field: inferredField,
+      researchQuestion: inferredResearchQuestion,
+    });
   }
   if (technical) {
     abstractLatex = stripDisplayedMathFromBody(abstractLatex);
@@ -888,11 +1002,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const skeletonRaw = await openAiThesisText(
       buildSkeletonPrompt({
         project: {
-          title: project.title,
-          field: project.field,
+          title: inferredTitle,
+          field: inferredField,
           degreeLevel: project.degreeLevel,
           language: project.language,
-          researchQuestion: project.researchQuestion,
+          researchQuestion: inferredResearchQuestion,
         },
         section,
         references: referenceSnippets,
@@ -906,11 +1020,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
     const prompt = buildSectionPrompt({
       project: {
-        title: project.title,
-        field: project.field,
+        title: inferredTitle,
+        field: inferredField,
         degreeLevel: project.degreeLevel,
         language: project.language,
-        researchQuestion: project.researchQuestion,
+        researchQuestion: inferredResearchQuestion,
         description: project.description,
       },
       globalPrompt: composedGlobalPrompt,
@@ -924,6 +1038,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       technicalPipeline: technical,
       thesisBlueprint,
       highQualityThesis,
+      hasDataset,
     });
 
     const maxOut = highQualityThesis
@@ -952,6 +1067,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       const extra = await openAiThesisText(expansionPrompt, maxOut);
       if (!extra) break;
       combinedText = sanitizeThesisLatexMath(`${combinedText}\n\n${extra}`);
+      combinedText = stripMarkdownLatexArtifacts(combinedText);
       currentWords = countApproxWords(combinedText);
 
       pass += 1;
@@ -968,6 +1084,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       const revised = await openAiThesisText(repairPrompt, maxOut);
       if (!revised) break;
       combinedText = sanitizeThesisLatexMath(revised);
+      combinedText = stripMarkdownLatexArtifacts(combinedText);
       hierarchyCheck = draftHasDenseHierarchy(combinedText);
       structurePass += 1;
     }
@@ -992,6 +1109,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
 
     combinedText = sanitizeThesisLatexMath(combinedText);
+    combinedText = stripMarkdownLatexArtifacts(combinedText);
 
     let qualityIssues = auditChapterBody(combinedText, chapterKind, {
       chapterOrderIndex: chapterIndex,
@@ -1010,6 +1128,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       const fixed = await openAiThesisText(repairQ, qualityRepairMaxTok);
       if (!fixed) break;
       combinedText = sanitizeThesisLatexMath(fixed);
+      combinedText = stripMarkdownLatexArtifacts(combinedText);
       qualityIssues = auditChapterBody(combinedText, chapterKind, {
         chapterOrderIndex: chapterIndex,
         technicalPipeline: technical,
@@ -1028,6 +1147,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       );
       if (deduped.trim()) {
         combinedText = sanitizeThesisLatexMath(deduped);
+        combinedText = stripMarkdownLatexArtifacts(combinedText);
         combinedText = stripDisplayedMathFromBody(combinedText);
       }
     }
@@ -1061,6 +1181,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         );
         if (repairedAbs.trim()) {
           abstractLatex = sanitizeThesisLatexMath(repairedAbs);
+          abstractLatex = stripMarkdownLatexArtifacts(abstractLatex);
           if (technical) abstractLatex = stripDisplayedMathFromBody(abstractLatex);
         }
       }
@@ -1078,6 +1199,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         );
         if (repaired.trim()) {
           drafts[i].content = sanitizeThesisLatexMath(repaired);
+          drafts[i].content = stripMarkdownLatexArtifacts(drafts[i].content);
           if (technical && i < 2) {
             drafts[i].content = stripDisplayedMathFromBody(drafts[i].content);
           }
@@ -1138,6 +1260,18 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     ...placeholderHits.map((h) => `${h.code}: ${h.message}`),
     ...hqGateIssues.map((i) => `${i.code}: ${i.detail}`),
   ];
+  const citationsInserted = countMatches(
+    [abstractLatex, ...drafts.map((d) => d.content)].join("\n"),
+    /\[(\d{1,3})\]|\\cite[tp]?\{/g,
+  );
+  console.log("[full-draft] final", {
+    projectId: id,
+    inferredTitle,
+    sourcesUsed: papers.length,
+    citationsInserted,
+    qualityGatePassed: qualityWarnings.length === 0,
+    qualityWarnings,
+  });
 
   return NextResponse.json({
     success: true,

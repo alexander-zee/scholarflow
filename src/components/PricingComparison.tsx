@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { type ReactNode, useState } from "react";
+import UpgradeToProButton from "@/components/UpgradeToProButton";
 import { Info } from "lucide-react";
 import {
   FEATURE_LABELS,
@@ -14,8 +15,6 @@ import {
 type Billing = "monthly" | "annual";
 
 type PricingComparisonProps = {
-  /** Where the Pro CTA navigates (e.g. `/pricing` on home, `/billing` on pricing page). */
-  proCtaHref: string;
   /** Semantic level for the main title (home uses h2 inside page; pricing page uses h1). */
   titleLevel?: "h1" | "h2";
   className?: string;
@@ -83,7 +82,7 @@ function LabelColumn() {
   );
 }
 
-export default function PricingComparison({ proCtaHref, titleLevel = "h2", className = "" }: PricingComparisonProps) {
+export default function PricingComparison({ titleLevel = "h2", className = "" }: PricingComparisonProps) {
   const [billing, setBilling] = useState<Billing>("monthly");
   const monthlyYearTotal = PRO_MONTHLY * 12;
   const TitleTag = titleLevel;
@@ -180,12 +179,12 @@ export default function PricingComparison({ proCtaHref, titleLevel = "h2", class
           <div className="flex min-h-0 flex-1 flex-col">
             <ComparisonRows values={PRO_VALUES} />
           </div>
-          <Link
-            href={proCtaHref}
-            className="mt-8 block w-full rounded-full bg-gradient-to-r from-cyan-400 to-teal-300 py-3 text-center text-sm font-semibold text-slate-950 shadow-[0_0_30px_rgba(34,211,238,0.25)] transition hover:brightness-110 lg:mt-auto"
+          <UpgradeToProButton
+            billing={billing}
+            className="mt-8 block w-full rounded-full bg-gradient-to-r from-cyan-400 to-teal-300 py-3 text-center text-sm font-semibold text-slate-950 shadow-[0_0_30px_rgba(34,211,238,0.25)] transition hover:brightness-110 disabled:opacity-70 lg:mt-auto"
           >
             Upgrade to Pro
-          </Link>
+          </UpgradeToProButton>
         </article>
       </div>
     </div>

@@ -146,13 +146,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     let created = 0;
     let pdfAttached = 0;
     let metadataOnly = 0;
+    const sourceIdsAdded: string[] = [];
 
     for (const p of finalList) {
       const pdf = p.pdfUrl ? await tryFetchPdfText(p.pdfUrl, p.title) : null;
       const metadata = metadataBlock(p);
       const extractedText = pdf ? `${metadata}\n\n${pdf.text}` : metadata;
 
-      await prisma.referencePaper.create({
+      const createdRow = await prisma.referencePaper.create({
         data: {
           projectId: id,
           originalName: safeFilename(p.title, Boolean(pdf)),
@@ -160,7 +161,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
           sizeBytes: pdf?.sizeBytes ?? Buffer.byteLength(metadata, "utf8"),
           extractedText,
         },
+        select: { id: true },
       });
+      sourceIdsAdded.push(createdRow.id);
       created += 1;
       if (pdf) pdfAttached += 1;
       else metadataOnly += 1;
@@ -173,6 +176,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       metadataOnly,
       skippedDuplicates: parsed.data.papers.length - toImport.length,
       skippedLimit: Math.max(0, toImport.length - finalList.length),
+      sourceIdsAdded,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Import failed.";
