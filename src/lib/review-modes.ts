@@ -15,7 +15,7 @@ export const integrityNotice =
 
 export function buildReviewPrompt(inputText: string, mode: ReviewMode) {
   return `
-You are ScholarFlow, an AI writing coach for academic thesis/report improvement.
+You are ThesisPilot, an AI writing coach for academic thesis/report improvement.
 
 Mode: ${mode}
 

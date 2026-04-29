@@ -139,7 +139,7 @@ export default function SupportChatBubble({ side = "right", showLabel = false }:
             </h2>
             <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Academic Support Advisor</p>
             <p className="mt-7 text-sm leading-relaxed text-slate-600 dark:text-slate-300">
-              Hello, welcome to ScholarFlow support. Please write your question in English.
+              Hello, welcome to ThesisPilot support. Please write your question in English.
               We get back to you within 12h, usually sooner.
             </p>
           </div>
@@ -194,7 +194,7 @@ export default function SupportChatBubble({ side = "right", showLabel = false }:
             {statusText ? (
               <p className="mt-2 text-xs font-medium text-emerald-700">{statusText}</p>
             ) : null}
-            <p className="mt-2 text-center text-[10px] text-slate-400 dark:text-slate-500">ScholarFlow · support</p>
+            <p className="mt-2 text-center text-[10px] text-slate-400 dark:text-slate-500">ThesisPilot · support</p>
           </div>
         </div>
       ) : null}

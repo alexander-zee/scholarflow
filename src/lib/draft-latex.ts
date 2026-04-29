@@ -70,12 +70,21 @@ export function buildLatexPaperFromChapters(
     .join("\n\n");
 
   // Preamble kept minimal: LaTeX.js loads \\usepackage{...} via dynamic imports that break in Next/browser bundles.
+  // Stub natbib-like commands so thesis-style \\citep/\\citet from the model render in-browser (export uses real natbib).
+  const citeStubs = `\\providecommand{\\citep}[1]{[\\emph{#1}]}
+\\providecommand{\\citet}[1]{\\emph{#1}}
+\\providecommand{\\citealt}[1]{\\emph{#1}}
+\\providecommand{\\citeauthor}[1]{\\emph{#1}}
+\\providecommand{\\citeyear}[1]{#1}
+`;
+
   return `\\documentclass[11pt,a4paper]{article}
 \\title{${escapeLatex(projectTitle)}}
 \\date{}
 
 \\begin{document}
 \\maketitle
+${citeStubs}
 ${intro}${blocks}
 \\end{document}
 `.trim();

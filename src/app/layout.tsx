@@ -4,7 +4,8 @@ import Script from "next/script";
 import Navbar from "@/components/Navbar";
 import "./globals.css";
 
-const themeInit = `(function(){try{var t=localStorage.getItem("sf-theme");if(t==="dark")document.documentElement.classList.add("dark");else if(t==="light")document.documentElement.classList.remove("dark");else if(window.matchMedia("(prefers-color-scheme: dark)").matches)document.documentElement.classList.add("dark");}catch(e){}})();`;
+/** Default is light; only `sf-theme === "dark"` opts in (system preference is ignored unless user chooses dark). */
+const themeInit = `(function(){try{var t=localStorage.getItem("sf-theme");if(t==="dark")document.documentElement.classList.add("dark");else document.documentElement.classList.remove("dark");}catch(e){}})();`;
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -17,7 +18,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ScholarFlow — Thesis workspace & AI supervisor",
+  title: "ThesisPilot — Thesis workspace & AI supervisor",
   description:
     "Reference-first thesis workspace: upload papers, generate outlines and draft scaffolding, then revise in a writing studio with supervisor-style feedback, anchored comments, and integrity-first guardrails.",
 };
@@ -33,7 +34,7 @@ export default function RootLayout({
         <Script id="sf-theme-init" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: themeInit }} />
         <Navbar />
         {/* pb-0 avoids a patterned strip below full-bleed footers on the home page */}
-        <div className="mx-auto w-full max-w-[2200px] px-3 pt-5 pb-0 md:px-4 md:pt-5">{children}</div>
+        <div className="mx-auto w-full max-w-[2200px] px-3 pb-0 pt-0 md:px-4">{children}</div>
       </body>
     </html>
   );

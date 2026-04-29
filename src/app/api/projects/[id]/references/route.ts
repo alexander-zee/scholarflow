@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { extractTextFromUpload } from "@/lib/reference-extract";
 
-const MAX_FILES = 5;
+const MAX_FILES = 200;
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
 
 export async function GET(
@@ -59,6 +59,14 @@ export async function POST(
       return NextResponse.json({ error: "Project not found." }, { status: 404 });
     }
 
+    const existingCount = await prisma.referencePaper.count({ where: { projectId: id } });
+    if (existingCount >= MAX_FILES) {
+      return NextResponse.json(
+        { error: `This project already has ${MAX_FILES} references (maximum). Remove one to add more.` },
+        { status: 400 },
+      );
+    }
+
     const formData = await request.formData();
     const files = formData.getAll("files").filter((value): value is File => value instanceof File);
 
@@ -68,6 +76,14 @@ export async function POST(
 
     if (files.length > MAX_FILES) {
       return NextResponse.json({ error: `Too many files. Max is ${MAX_FILES}.` }, { status: 400 });
+    }
+
+    const slotsLeft = MAX_FILES - existingCount;
+    if (files.length > slotsLeft) {
+      return NextResponse.json(
+        { error: `You can add at most ${slotsLeft} more reference file(s) (max ${MAX_FILES} per project).` },
+        { status: 400 },
+      );
     }
 
     let created = 0;

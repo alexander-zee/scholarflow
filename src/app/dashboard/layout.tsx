@@ -1,4 +1,6 @@
-import UsageBadge from "@/components/UsageBadge";
+import ConditionalUsageBadge from "@/components/ConditionalUsageBadge";
+import DashboardBodyChrome from "@/components/DashboardBodyChrome";
+import SupportChatBubble from "@/components/SupportChatBubble";
 import { auth } from "@/auth";
 import { getOrCreateUsageLimit } from "@/lib/usage";
 import { redirect } from "next/navigation";
@@ -17,9 +19,10 @@ export default async function DashboardLayout({
     : { aiReviewsUsed: 0, aiReviewsLimit: 0 };
 
   return (
-    <div className="space-y-2 pb-0">
-      <UsageBadge used={usage.aiReviewsUsed} limit={usage.aiReviewsLimit} />
+    <DashboardBodyChrome>
+      <ConditionalUsageBadge used={usage.aiReviewsUsed} limit={usage.aiReviewsLimit} />
       {children}
-    </div>
+      <SupportChatBubble side="right" />
+    </DashboardBodyChrome>
   );
 }

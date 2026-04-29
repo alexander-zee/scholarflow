@@ -17,6 +17,7 @@
     "bcryptjs": "^3.0.3",
     "date-fns": "^4.1.0",
     "latex.js": "^0.12.6",
+    "lucide-react": "^1.11.0",
     "mammoth": "^1.12.0",
     "marked": "^18.0.2",
     "next": "16.2.4",
@@ -43,5 +44,11 @@
     "eslint-config-next": "16.2.4",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "optionalDependencies": {
+    "@node-latex-compiler/bin-darwin-arm64": "^1.0.5",
+    "@node-latex-compiler/bin-darwin-x64": "^1.0.5",
+    "@node-latex-compiler/bin-linux-x64": "^1.0.5",
+    "@node-latex-compiler/bin-win32-x64": "^1.0.5"
   }
 }

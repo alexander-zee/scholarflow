@@ -17,11 +17,8 @@ function truncate(text: string) {
   return `${text.slice(0, MAX_EXTRACTED_CHARS)}\n\n[TRUNCATED_FOR_STORAGE]`;
 }
 
-export async function extractTextFromUpload(file: File) {
-  const mime = file.type || "application/octet-stream";
-  const name = file.name || "upload";
+export async function extractTextFromBuffer(name: string, mime: string, buffer: Buffer) {
   const lowerName = name.toLowerCase();
-  const buffer = Buffer.from(await file.arrayBuffer());
 
   if (mime === "application/pdf" || lowerName.endsWith(".pdf")) {
     try {
@@ -82,4 +79,11 @@ export async function extractTextFromUpload(file: File) {
   }
 
   throw new Error("Unsupported file type. Use PDF or Word files (.pdf, .docx, .doc).");
+}
+
+export async function extractTextFromUpload(file: File) {
+  const mime = file.type || "application/octet-stream";
+  const name = file.name || "upload";
+  const buffer = Buffer.from(await file.arrayBuffer());
+  return extractTextFromBuffer(name, mime, buffer);
 }

@@ -27,7 +27,7 @@ export async function POST(request: Request) {
   const port = Number(process.env.EMAIL_SERVER_PORT || "587");
   const user = process.env.EMAIL_SERVER_USER;
   const pass = process.env.EMAIL_SERVER_PASSWORD;
-  const from = process.env.EMAIL_FROM || "ScholarFlow <no-reply@scholarflow.local>";
+  const from = process.env.EMAIL_FROM || "ThesisPilot <no-reply@thesispilot.local>";
   const to = resolveSupportInbox();
 
   if (!host || !user || !pass || !to) {
@@ -79,11 +79,11 @@ export async function POST(request: Request) {
     from,
     to,
     replyTo: from,
-    subject: "ScholarFlow support message",
+    subject: "ThesisPilot support message",
     text: `New support message:\n\n${message}\n`,
     html: `
       <div style="font-family: Arial, sans-serif; line-height: 1.5;">
-        <h2>New ScholarFlow support message</h2>
+        <h2>New ThesisPilot support message</h2>
         <p><strong>Message:</strong></p>
         <p style="white-space: pre-wrap;">${message.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>
       </div>

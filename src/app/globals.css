@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+html,
+body {
+  margin: 0;
+}
+
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
@@ -7,8 +12,8 @@
   --sf-navy: #0f2847;
   --sf-teal: #0d9488;
   --sf-cyan: #06b6d4;
-  --sf-cream: #fafdff;
-  --sf-mist: #eef6ff;
+  --sf-cream: #f4f6f9;
+  --sf-mist: #e8edf3;
   --sf-blue: #0e7490;
   --background: var(--sf-cream);
   --foreground: var(--sf-ink);
@@ -18,9 +23,9 @@ html.dark {
   color-scheme: dark;
   --sf-ink: #e2e8f0;
   --sf-navy: #cbd5e1;
-  --sf-cream: #020617;
+  --sf-cream: #020814;
   --sf-mist: #0f172a;
-  --background: #020617;
+  --background: #020814;
   --foreground: #e2e8f0;
 }
 
@@ -31,30 +36,36 @@ html.dark {
   --font-mono: var(--font-geist-mono);
 }
 
-/* Light: clean white. Dark: slate base (toggle adds .dark on <html>). */
+/* Light: soft cool canvas. Dark: slate base (toggle adds .dark on <html>). */
 body {
   color: var(--foreground);
   font-family: var(--font-sans), system-ui, sans-serif;
-  background-color: #ffffff;
+  background-color: #f1f5f9;
   background-image: none;
   background-attachment: fixed;
 }
 
+html.dark {
+  background-color: #020617;
+}
+
 html.dark body {
+  /* Continuous dark canvas behind navbar + marketing (full-bleed; no side gutters) */
   background-color: #020617;
   color: var(--foreground);
 }
 
 .sf-landing-hero-pattern {
-  background-color: #ffffff;
+  background-color: #f8fafc;
   background-image:
-    linear-gradient(105deg, rgba(15, 40, 71, 0.04) 0%, transparent 42%),
-    radial-gradient(ellipse 70% 90% at 100% 0%, rgba(6, 182, 212, 0.1), transparent 58%),
-    linear-gradient(165deg, #ffffff 0%, #fafcff 100%);
+    linear-gradient(to right, rgb(148 163 184 / 0.1) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(148 163 184 / 0.1) 1px, transparent 1px),
+    linear-gradient(165deg, #ffffff 0%, #f1f5f9 100%);
+  background-size: 48px 48px, 48px 48px, auto;
   background-position:
-    calc(var(--sf-scroll-y, 0px) * -0.035) 0,
-    calc(100% + var(--sf-scroll-y, 0px) * 0.055) calc(var(--sf-scroll-y, 0px) * -0.09),
-    0 calc(var(--sf-scroll-y, 0px) * 0.045);
+    calc(var(--sf-scroll-y, 0px) * -0.02) calc(var(--sf-scroll-y, 0px) * 0.02),
+    calc(var(--sf-scroll-y, 0px) * -0.02) calc(var(--sf-scroll-y, 0px) * 0.02),
+    0 calc(var(--sf-scroll-y, 0px) * 0.03);
 }
 
 html.dark .sf-typing-dot {
@@ -62,28 +73,29 @@ html.dark .sf-typing-dot {
 }
 
 html.dark .sf-landing-hero-pattern {
-  background-color: #0f172a;
+  background-color: #030712;
   background-image:
-    linear-gradient(105deg, rgba(148, 163, 184, 0.08) 0%, transparent 42%),
-    radial-gradient(ellipse 70% 90% at 100% 0%, rgba(6, 182, 212, 0.12), transparent 58%),
-    linear-gradient(165deg, #0f172a 0%, #020617 100%);
+    linear-gradient(to right, rgb(148 163 184 / 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(148 163 184 / 0.045) 1px, transparent 1px),
+    linear-gradient(165deg, #0f172a 0%, #030712 100%);
+  background-size: 56px 56px, 56px 56px, auto;
   background-position:
-    calc(var(--sf-scroll-y, 0px) * -0.035) 0,
-    calc(100% + var(--sf-scroll-y, 0px) * 0.055) calc(var(--sf-scroll-y, 0px) * -0.09),
-    0 calc(var(--sf-scroll-y, 0px) * 0.045);
+    calc(var(--sf-scroll-y, 0px) * -0.02) calc(var(--sf-scroll-y, 0px) * 0.02),
+    calc(var(--sf-scroll-y, 0px) * -0.02) calc(var(--sf-scroll-y, 0px) * 0.02),
+    0 calc(var(--sf-scroll-y, 0px) * 0.03);
 }
 
 @keyframes jump-highlight-pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.35);
-    border-color: rgba(59, 130, 246, 0.45);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.45);
+    border-color: rgba(5, 150, 105, 0.55);
   }
   40% {
-    box-shadow: 0 0 0 10px rgba(59, 130, 246, 0.12);
-    border-color: rgba(59, 130, 246, 0.75);
+    box-shadow: 0 0 0 12px rgba(16, 185, 129, 0.18);
+    border-color: rgba(5, 150, 105, 0.85);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
     border-color: rgba(148, 163, 184, 0.35);
   }
 }
@@ -94,13 +106,13 @@ html.dark .sf-landing-hero-pattern {
 
 @keyframes jump-inset-glow {
   0% {
-    box-shadow: inset 0 0 0 0 rgba(59, 130, 246, 0);
+    box-shadow: inset 0 0 0 0 rgba(16, 185, 129, 0);
   }
   35% {
-    box-shadow: inset 0 0 0 4px rgba(59, 130, 246, 0.22), inset 0 0 28px 2px rgba(59, 130, 246, 0.12);
+    box-shadow: inset 0 0 0 4px rgba(16, 185, 129, 0.28), inset 0 0 32px 3px rgba(16, 185, 129, 0.14);
   }
   100% {
-    box-shadow: inset 0 0 0 0 rgba(59, 130, 246, 0);
+    box-shadow: inset 0 0 0 0 rgba(16, 185, 129, 0);
   }
 }
 
@@ -141,8 +153,26 @@ html.dark .sf-landing-hero-pattern {
   animation-delay: 0.36s;
 }
 
-textarea.editor-jump-active::selection {
-  background-color: rgba(250, 204, 21, 0.45);
+/* Draft jump / supervisor “Suggestions”: visible emerald selection in the textarea */
+textarea.editor-jump-active {
+  outline: 2px solid rgba(16, 185, 129, 0.55);
+  outline-offset: 1px;
+}
+
+textarea.editor-jump-active::selection,
+textarea.editor-jump-active::-moz-selection {
+  background-color: rgb(16 185 129 / 0.42);
+  color: rgb(15 23 16);
+}
+
+html.dark textarea.editor-jump-active::selection,
+html.dark textarea.editor-jump-active::-moz-selection {
+  background-color: rgb(52 211 153 / 0.38);
+  color: rgb(15 23 42);
+}
+
+html.dark textarea.editor-jump-active {
+  outline-color: rgb(45 212 191 / 0.45);
 }
 
 /* True edge-to-edge from inside padded layout wrappers */
@@ -309,6 +339,268 @@ textarea.editor-jump-active::selection {
   }
 }
 
+/* Large landing panels — subtle internal underglow + top glass line (premium depth, not neon) */
+.sf-landing-panel-depth {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.sf-landing-panel-depth__underglow {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 56%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 88% 72% at 50% 100%, rgba(14, 165, 233, 0.14) 0%, rgba(20, 184, 166, 0.08) 35%, transparent 70%),
+    radial-gradient(ellipse 48% 38% at 62% 100%, rgba(56, 189, 248, 0.07), transparent 55%);
+}
+
+.sf-landing-panel-depth__topshine {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0.88;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.16) 50%, transparent 100%);
+}
+
+.sf-landing-panel-depth__body {
+  position: relative;
+  z-index: 10;
+}
+
+/* Glass marketing cards — lighter underglow (same family, subtler) */
+.sf-landing-glass-card-depth {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.sf-landing-glass-card-depth::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 50%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 82% 68% at 50% 100%, rgba(14, 165, 233, 0.09) 0%, rgba(20, 184, 166, 0.05) 38%, transparent 72%),
+    radial-gradient(ellipse 40% 30% at 64% 100%, rgba(14, 165, 233, 0.05), transparent 58%);
+}
+
+.sf-landing-glass-card-depth::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.78;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.12) 50%, transparent 100%);
+}
+
+.sf-landing-glass-card-depth > * {
+  position: relative;
+  z-index: 2;
+}
+
+/* Landing: side wave SVG — very slow vertical drift (scrolls with page layer) */
+@keyframes waveDrift {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(16px);
+  }
+}
+
+/* Landing: hopeful premium — soft shine & pulse (no stars / space) */
+@keyframes sf-landing-cta-shine {
+  0% {
+    transform: translateX(-130%) skewX(-12deg);
+  }
+  100% {
+    transform: translateX(220%) skewX(-12deg);
+  }
+}
+
+@keyframes sf-landing-preview-edge-shine {
+  0% {
+    transform: translateX(-60%);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.55;
+  }
+  55% {
+    transform: translateX(120%);
+    opacity: 0.4;
+  }
+  100% {
+    transform: translateX(180%);
+    opacity: 0;
+  }
+}
+
+@keyframes sf-landing-card-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(34 211 238 / 0);
+    border-color: rgb(16 185 129 / 0.22);
+  }
+  50% {
+    box-shadow: 0 0 22px 0 rgb(34 211 238 / 0.14);
+    border-color: rgb(45 212 191 / 0.38);
+  }
+}
+
+.sf-landing-primary-cta {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.sf-landing-primary-cta::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 42%;
+  background: linear-gradient(105deg, transparent, rgba(255, 255, 255, 0.38), transparent);
+  transform: translateX(-140%) skewX(-12deg);
+  pointer-events: none;
+}
+
+.sf-landing-primary-cta > * {
+  position: relative;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sf-landing-primary-cta::after {
+    animation: sf-landing-cta-shine 5.5s ease-in-out infinite;
+  }
+
+  .sf-landing-primary-cta:hover::after,
+  .sf-landing-primary-cta:focus-visible::after {
+    animation-duration: 1.35s;
+  }
+}
+
+.sf-landing-preview-shell {
+  position: relative;
+}
+
+.sf-landing-preview-shell::before {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse 85% 72% at 72% 28%, rgba(148, 163, 184, 0.22), transparent 56%),
+    linear-gradient(125deg, rgba(148, 163, 184, 0.18), transparent 42%, transparent 58%, rgba(203, 213, 225, 0.12));
+  opacity: 0.38;
+  z-index: -1;
+  filter: blur(26px);
+  pointer-events: none;
+}
+
+html.dark .sf-landing-preview-shell::before {
+  background:
+    radial-gradient(ellipse 80% 70% at 70% 30%, rgba(34, 211, 238, 0.45), transparent 55%),
+    linear-gradient(125deg, rgba(34, 211, 238, 0.35), transparent 40%, transparent 58%, rgba(56, 189, 248, 0.22));
+  opacity: 0.72;
+  filter: blur(28px);
+}
+
+.sf-landing-preview-shell::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.45), transparent 44%, transparent 56%, rgba(148, 163, 184, 0.06));
+  opacity: 0.22;
+  filter: blur(1px);
+}
+
+html.dark .sf-landing-preview-shell::after {
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.1), transparent 42%, transparent 58%, rgba(6, 182, 212, 0.08));
+  opacity: 0.35;
+}
+
+.sf-landing-preview-edge-gloss {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.sf-landing-preview-edge-gloss > span {
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    transparent 38%,
+    rgba(255, 255, 255, 0.14) 50%,
+    transparent 62%,
+    transparent 100%
+  );
+  width: 55%;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sf-landing-preview-edge-gloss > span {
+    animation: sf-landing-preview-edge-shine 7s ease-in-out infinite;
+  }
+
+  .sf-landing-supervisor-pulse {
+    animation: sf-landing-card-pulse 3.2s ease-in-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sf-landing-primary-cta::after,
+  .sf-landing-preview-edge-gloss > span,
+  .sf-landing-supervisor-pulse,
+  .sf-landing-hero-caret {
+    animation: none !important;
+    opacity: 1;
+  }
+}
+
+/* Hero “live desk” caret — thesis / notetaker interaction cue (no purple) */
+@keyframes sf-landing-caret-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.15;
+  }
+}
+
+.sf-landing-hero-caret {
+  animation: sf-landing-caret-blink 1.08s step-end infinite;
+}
+
 .sf-scrollbar-hide {
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -411,7 +703,7 @@ html.dark .sf-faq-pattern::before {
 @media (prefers-reduced-motion: reduce) {
   .sf-landing-hero-pattern,
   html.dark .sf-landing-hero-pattern {
-    background-position: 0 0, 100% 0, 0 0;
+    background-position: 0 0, 0 0, 0 0;
   }
 
   .sf-pipeline-dark::before {

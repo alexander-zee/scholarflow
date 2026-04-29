@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { auth } from "@/auth";
-import ScholarFlowLogo from "@/components/ScholarFlowLogo";
+import NavbarStickyChrome from "@/components/NavbarStickyChrome";
+import ThesisPilotLogo from "@/components/ScholarFlowLogo";
 import ThemeToggle from "@/components/ThemeToggle";
 
 export default async function Navbar() {
@@ -8,31 +9,34 @@ export default async function Navbar() {
   const isLoggedIn = Boolean(session?.user);
 
   return (
-    <header className="sticky top-2 z-50 bg-gradient-to-b from-white/92 via-white/78 to-transparent px-3 pb-2 pt-3 dark:from-slate-950/92 dark:via-slate-950/70 dark:to-transparent md:px-4">
-      <div className="mx-auto flex w-full max-w-[1780px] items-center justify-between gap-3 rounded-full border border-cyan-300/55 bg-white/92 px-4 py-2 shadow-lg shadow-cyan-900/15 backdrop-blur-md dark:border-slate-500/70 dark:bg-slate-900/92 dark:shadow-black/30 sm:px-6 sm:py-2.5">
-        <ScholarFlowLogo />
-        <nav className="flex items-center gap-4 text-sm md:gap-5">
-          <Link href="/pricing" className="text-[#0c1e3c]/80 transition hover:text-[#0f2847] dark:text-slate-300 dark:hover:text-white">
+    <NavbarStickyChrome>
+      <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-4 rounded-full border border-[#D9E8FF] bg-white/70 px-5 py-3.5 shadow-[0_12px_40px_-16px_rgba(7,26,58,0.12),0_0_48px_-12px_rgba(23,107,255,0.12)] ring-1 ring-inset ring-white/40 backdrop-blur-xl dark:border-cyan-400/15 dark:bg-slate-950/50 dark:shadow-[0_20px_56px_-18px_rgba(0,0,0,0.7),0_0_56px_-14px_rgba(34,211,238,0.22),inset_0_1px_0_rgba(255,255,255,0.07)] dark:ring-cyan-300/12 dark:backdrop-blur-xl sm:gap-5 sm:px-7 sm:py-4 md:max-w-5xl md:gap-6 supports-[backdrop-filter]:bg-white/60 supports-[backdrop-filter]:dark:bg-slate-950/45">
+        <ThesisPilotLogo />
+        <nav className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 text-sm md:gap-x-7 md:gap-y-2">
+          <Link href="/pricing" className="text-[#071A3A]/75 transition hover:text-[#176BFF] dark:text-slate-300 dark:hover:text-white">
             Pricing
           </Link>
-          <Link href="/academic-integrity" className="text-[#0c1e3c]/80 hover:text-[#0f2847] dark:text-slate-300 dark:hover:text-white">
-            Academic Integrity
+          <Link
+            href={isLoggedIn ? "/settings" : "/auth/signin?callbackUrl=/settings"}
+            className="text-[#071A3A]/75 transition hover:text-[#176BFF] dark:text-slate-300 dark:hover:text-white"
+          >
+            Settings
           </Link>
           {isLoggedIn ? (
             <Link
               href="/dashboard"
-              className="rounded-full bg-gradient-to-r from-teal-600 to-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-teal-900/15"
+              className="rounded-full bg-gradient-to-r from-[#176BFF] to-[#2563EB] px-4 py-2 text-sm font-semibold text-white shadow-[0_0_24px_-6px_rgba(23,107,255,0.35)] transition hover:shadow-[0_0_32px_-4px_rgba(37,99,235,0.45)]"
             >
               Dashboard
             </Link>
           ) : (
             <>
-              <Link href="/auth/signin" className="text-[#0c1e3c]/80 hover:text-[#0f2847] dark:text-slate-300 dark:hover:text-white">
+              <Link href="/auth/signin" className="text-[#071A3A]/75 hover:text-[#176BFF] dark:text-slate-300 dark:hover:text-white">
                 Sign in
               </Link>
               <Link
                 href="/auth/signup"
-                className="rounded-full bg-gradient-to-r from-teal-600 to-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-teal-900/15"
+                className="rounded-full bg-gradient-to-r from-[#176BFF] to-[#2563EB] px-4 py-2 text-sm font-semibold text-white shadow-[0_0_24px_-6px_rgba(23,107,255,0.35)] transition hover:shadow-[0_0_32px_-4px_rgba(37,99,235,0.45)]"
               >
                 Sign up
               </Link>
@@ -41,6 +45,6 @@ export default async function Navbar() {
           <ThemeToggle />
         </nav>
       </div>
-    </header>
+    </NavbarStickyChrome>
   );
 }
