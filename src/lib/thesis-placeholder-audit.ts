@@ -15,6 +15,21 @@ const BANNED_SUBSTRINGS: { pattern: RegExp; code: string; message: string }[] = 
     code: "ban_equation_tilde",
     message: "Dangling Equation~ without a \\ref{...} target.",
   },
+  {
+    pattern: /Figure~(?!\\ref\{)/,
+    code: "ban_dangling_figure_tilde",
+    message: "Figure~ must always be followed by \\ref{...} (no bare Figure~).",
+  },
+  {
+    pattern: /Table~(?!\\ref\{)/,
+    code: "ban_dangling_table_tilde",
+    message: "Table~ must always be followed by \\ref{...} (no bare Table~).",
+  },
+  {
+    pattern: /Placeholder\s*[—-]\s*complete|\[Placeholder/i,
+    code: "ban_placeholder_reference_phrase",
+    message: "Remove placeholder reference phrasing; use real bibliography text or uploaded source keys only.",
+  },
 ];
 
 /** Standalone "research question" as only substantive line (after stripping LaTeX). */

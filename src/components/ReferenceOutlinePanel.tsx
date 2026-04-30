@@ -34,6 +34,35 @@ type PaperSearchApiResponse = {
   cached?: boolean;
 };
 
+type ExportBannerPayload = {
+  title: string;
+  intro: string;
+  warnings: { code: string; message: string }[];
+};
+
+function parseExportWarningsFromHeaders(res: Response): ExportBannerPayload | null {
+  const b64 = res.headers.get("X-ScholarFlow-Export-Warnings-B64");
+  if (!b64) return null;
+  try {
+    const json = JSON.parse(atob(b64)) as ExportBannerPayload & { v?: number };
+    if (!json.warnings || !Array.isArray(json.warnings)) return null;
+    return {
+      title: json.title || "Export completed with warnings",
+      intro: json.intro || "",
+      warnings: json.warnings,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function filenameFromExportResponse(res: Response, fallback: string) {
+  const cd = res.headers.get("Content-Disposition");
+  if (!cd) return fallback;
+  const m = /filename="([^"]+)"/i.exec(cd);
+  return m?.[1]?.trim() || fallback;
+}
+
 function paperResultToHit(p: PaperResult, idx: number): ScholarListHit {
   const isGuidance = p.source === "search_guidance";
   const displayUrl =
@@ -215,8 +244,9 @@ export default function ReferenceOutlinePanel({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"upload" | "outline" | "draft" | null>(null);
   const [draftProgress, setDraftProgress] = useState(0);
+  const [draftJobStep, setDraftJobStep] = useState("");
 
-  const [pages, setPages] = useState(40);
+  const [pages, setPages] = useState(20);
   const [citationStyle, setCitationStyle] = useState("APA");
   const [citationLevel, setCitationLevel] = useState("Standard");
   const [citationCoverage, setCitationCoverage] = useState(50);
@@ -225,6 +255,8 @@ export default function ReferenceOutlinePanel({
   const [expandedSetting, setExpandedSetting] = useState<string | null>(null);
   const [showBottomActionBar, setShowBottomActionBar] = useState(hasOutline);
   const [pdfModeBadge, setPdfModeBadge] = useState<"checking" | "latex" | "fallback">("checking");
+  const [exportBusy, setExportBusy] = useState<string | null>(null);
+  const [exportBanner, setExportBanner] = useState<(ExportBannerPayload & { format: string }) | null>(null);
   const [referenceMode, setReferenceMode] = useState<"default" | "upload" | "semantic">("default");
   const [semanticSelectedFields, setSemanticSelectedFields] = useState<string[]>(() => [...DEFAULT_SEMANTIC_FIELDS]);
   const [semanticFieldsInPrompt, setSemanticFieldsInPrompt] = useState(false);
@@ -286,6 +318,43 @@ export default function ReferenceOutlinePanel({
   useEffect(() => {
     setReferenceCountDelta(0);
   }, [references.length]);
+
+  async function runThesisExportDownload(format: "pdf" | "tex" | "txt" | "md") {
+    setExportBusy(format);
+    setError("");
+    try {
+      const res = await fetch(`/api/projects/${projectId}/export?format=${format}`, { credentials: "include" });
+      if (!res.ok) {
+        const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+        setExportBanner(null);
+        setError(typeof errBody.error === "string" ? errBody.error : `Export failed (${res.status}).`);
+        return;
+      }
+      const blob = await res.blob();
+      const fallbackName =
+        format === "tex" ? "thesis.tex" : format === "pdf" ? "thesis.pdf" : format === "md" ? "thesis.md" : "thesis.txt";
+      const name = filenameFromExportResponse(res, fallbackName);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      const parsed = parseExportWarningsFromHeaders(res);
+      if (parsed && parsed.warnings.length > 0) {
+        setExportBanner({ ...parsed, format });
+      } else {
+        setExportBanner(null);
+      }
+    } catch (e) {
+      setExportBanner(null);
+      setError(e instanceof Error ? e.message : "Export failed.");
+    } finally {
+      setExportBusy(null);
+    }
+  }
 
   function buildComposedPrompt() {
     const settingsBlock = [
@@ -608,6 +677,7 @@ export default function ReferenceOutlinePanel({
   async function generateFullDraft() {
     setError("");
     setMessage("");
+    setDraftJobStep("");
     console.log("[full-draft-ui] validation", {
       promptWords: promptWordCount,
       effectiveSources: effectiveReferenceCount,
@@ -620,10 +690,22 @@ export default function ReferenceOutlinePanel({
     const composedPrompt = buildComposedPrompt();
 
     setBusy("draft");
-    setDraftProgress(8);
-    const tick = window.setInterval(() => {
-      setDraftProgress((current) => (current >= 92 ? current : current + 7));
-    }, 900);
+    setDraftProgress(2);
+
+    type FullDraftJobPoll = {
+      success?: boolean;
+      jobId?: string;
+      status?: string;
+      progress?: number;
+      lastStep?: string | null;
+      failedStep?: string | null;
+      message?: string | null;
+      details?: string | null;
+      skippedSources?: { filename: string; reason: string }[];
+      resultSections?: number | null;
+      error?: string;
+    };
+
     try {
       if (!hasOutline) {
         const outlineResponse = await fetch(`/api/projects/${projectId}/outline`, {
@@ -631,7 +713,7 @@ export default function ReferenceOutlinePanel({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt: composedPrompt }),
         });
-        const outlineJson = await outlineResponse.json();
+        const outlineJson = (await outlineResponse.json()) as { error?: string; redirectTo?: string };
         if (!outlineResponse.ok) {
           if (outlineResponse.status === 402 && outlineJson.redirectTo) {
             window.location.href = outlineJson.redirectTo;
@@ -647,26 +729,136 @@ export default function ReferenceOutlinePanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: composedPrompt }),
       });
-      const json = await response.json();
-      if (!response.ok) {
-        if (response.status === 402 && json.redirectTo) {
-          window.location.href = json.redirectTo;
-          return;
-        }
-        setError(json.error || "Full draft generation failed.");
+
+      let queued: FullDraftJobPoll & { async?: boolean; sectionsCreated?: number };
+      try {
+        queued = (await response.json()) as typeof queued;
+      } catch {
+        setError(
+          response.status >= 500
+            ? "Full draft server error (response was not JSON). The job may still be running—refresh the page and check Document sections in a few minutes."
+            : "Full draft generation failed (could not read server response).",
+        );
         return;
       }
 
-      setMessage(`Generated ${json.sectionsCreated} draft chapter(s). Scroll to Document sections.`);
-      setDraftProgress(100);
-      setShowBottomActionBar(true);
-      router.refresh();
-    } catch {
-      setError("Full draft generation failed.");
+      if (response.status === 402 && (queued as { redirectTo?: string }).redirectTo) {
+        window.location.href = (queued as { redirectTo: string }).redirectTo;
+        return;
+      }
+
+      if (!response.ok) {
+        const failedStep = (queued as { failedStep?: string }).failedStep;
+        const details = (queued as { details?: string }).details;
+        const skipped = (queued as { skippedSources?: { filename: string; reason: string }[] }).skippedSources;
+        const lines = [
+          failedStep ? `Generation failed at: ${failedStep}` : null,
+          queued.message || queued.error || `Request failed (HTTP ${response.status}).`,
+          details || null,
+        ].filter(Boolean) as string[];
+        setError(lines.join("\n\n"));
+        if (skipped?.length) {
+          setMessage(
+            `Skipped sources (${skipped.length}): ${skipped.map((s) => `${s.filename} (${s.reason})`).join("; ")}`,
+          );
+        }
+        return;
+      }
+
+      if (response.status !== 202 || !queued.jobId) {
+        setMessage(
+          typeof queued.sectionsCreated === "number"
+            ? `Generated ${queued.sectionsCreated} draft chapter(s). Scroll to Document sections.`
+            : (queued.message as string) || "Full draft finished.",
+        );
+        setDraftProgress(100);
+        setShowBottomActionBar(true);
+        router.refresh();
+        return;
+      }
+
+      const jobId = queued.jobId;
+      const pollMs = 2500;
+      const deadline = Date.now() + 70 * 60 * 1000;
+
+      while (Date.now() < deadline) {
+        const st = await fetch(`/api/projects/${projectId}/full-draft?jobId=${encodeURIComponent(jobId)}`, {
+          cache: "no-store",
+        });
+        let j: FullDraftJobPoll;
+        try {
+          j = (await st.json()) as FullDraftJobPoll;
+        } catch {
+          setError("Could not read job status from the server.");
+          return;
+        }
+        if (!st.ok) {
+          if (st.status === 402 && (j as { redirectTo?: string }).redirectTo) {
+            window.location.href = (j as { redirectTo: string }).redirectTo;
+            return;
+          }
+          setError(j.error || j.message || j.details || `Job poll failed (HTTP ${st.status}).`);
+          return;
+        }
+
+        setDraftProgress(typeof j.progress === "number" ? j.progress : 0);
+        setDraftJobStep((j.lastStep || j.status || "").replace(/_/g, " "));
+
+        if (j.status === "completed" || j.status === "partial_success" || j.status === "success_with_warnings") {
+          let generationBanner = "";
+          try {
+            const parsed = j.details ? (JSON.parse(j.details) as {
+              generationDiagnostics?: {
+                generationMode?: string;
+                selectedModel?: string;
+                temperature?: number;
+                fallbackModelUsed?: boolean;
+                repairTriggered?: boolean;
+              };
+            }) : null;
+            const dx = parsed?.generationDiagnostics;
+            if (dx) {
+              generationBanner = ` Generated with: ${dx.generationMode || "unknown"} / ${dx.selectedModel || "model-unknown"} / temp ${dx.temperature ?? "n/a"} / fallback used: ${dx.fallbackModelUsed ? "yes" : "no"} / repairs: ${dx.repairTriggered ? "yes" : "no"}.`;
+            }
+          } catch {
+            generationBanner = "";
+          }
+          setMessage(
+            `${j.status === "completed" ? "Generated" : "Generated with warnings"} ${j.resultSections ?? 0} draft chapter(s). Scroll to Document sections.${generationBanner}`,
+          );
+          setDraftProgress(100);
+          setShowBottomActionBar(true);
+          router.refresh();
+          return;
+        }
+
+        if (j.status === "failed") {
+          const lines = [
+            j.failedStep ? `Generation failed at: ${j.failedStep.replace(/_/g, " ")}` : "Generation failed.",
+            j.message || null,
+            j.details || null,
+          ].filter(Boolean) as string[];
+          setError(lines.join("\n\n"));
+          if (j.skippedSources?.length) {
+            setMessage(
+              `Skipped sources (${j.skippedSources.length}): ${j.skippedSources.map((s) => `${s.filename} (${s.reason})`).join("; ")}`,
+            );
+          }
+          return;
+        }
+
+        await new Promise((r) => window.setTimeout(r, pollMs));
+      }
+
+      setError("Timed out waiting for the full draft job (over 70 minutes). Check Document sections—the server may still finish in the background.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Full draft generation failed (network or unexpected error).");
     } finally {
-      window.clearInterval(tick);
       setBusy(null);
-      window.setTimeout(() => setDraftProgress(0), 900);
+      window.setTimeout(() => {
+        setDraftProgress(0);
+        setDraftJobStep("");
+      }, 1200);
     }
   }
 
@@ -1081,13 +1273,17 @@ export default function ReferenceOutlinePanel({
               </p>
 
               {busy === "draft" ? (
-                <div>
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                <div className="space-y-2">
+                  <div className="h-3 w-full overflow-hidden rounded-full border border-slate-300/80 bg-slate-300 dark:border-sky-400/35 dark:bg-slate-800">
                     <div
-                      className="h-full rounded-full bg-gradient-to-r from-[#176BFF] to-sky-500 transition-all dark:from-sky-400 dark:to-sky-500"
-                      style={{ width: `${draftProgress}%` }}
+                      className="h-full rounded-full bg-gradient-to-r from-[#176BFF] via-sky-500 to-cyan-400 shadow-[0_0_10px_rgba(23,107,255,0.45)] transition-all dark:from-sky-300 dark:via-sky-400 dark:to-cyan-300"
+                      style={{ width: `${Math.min(100, Math.max(2, draftProgress))}%` }}
                     />
                   </div>
+                  <p className="px-1 text-xs font-medium text-slate-600 dark:text-slate-400">
+                    {draftJobStep ? `Current step: ${draftJobStep}` : "Starting…"}
+                    {typeof draftProgress === "number" ? ` · ${draftProgress}%` : ""}
+                  </p>
                 </div>
               ) : null}
 
@@ -1102,7 +1298,9 @@ export default function ReferenceOutlinePanel({
                   {message}
                 </p>
               ) : null}
-              {error ? <p className="text-sm font-medium text-red-700 dark:text-red-400">{error}</p> : null}
+              {error ? (
+                <p className="whitespace-pre-wrap text-sm font-medium text-red-700 dark:text-red-400">{error}</p>
+              ) : null}
 
               {showBottomActionBar ? (
             <div className="rounded-2xl border border-slate-200/80 bg-white/95 p-3 shadow-[0_8px_22px_rgba(15,23,42,0.06)] backdrop-blur-sm dark:border-white/10 dark:bg-slate-950/35 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_12px_40px_rgba(0,0,0,0.35)] dark:backdrop-blur-xl">
@@ -1119,12 +1317,15 @@ export default function ReferenceOutlinePanel({
                 >
                   Feedback history
                 </Link>
-                <a
-                  href={`/api/projects/${projectId}/export?format=pdf`}
-                  className="rounded-lg border border-slate-300/90 bg-white px-4 py-2 text-sm font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 dark:border-white/14 dark:bg-slate-950/45 dark:text-slate-100 dark:backdrop-blur-md dark:hover:bg-slate-900/55"
+                <button
+                  type="button"
+                  disabled={!!exportBusy}
+                  onClick={() => void runThesisExportDownload("pdf")}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300/90 bg-white px-4 py-2 text-sm font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 disabled:opacity-60 dark:border-white/14 dark:bg-slate-950/45 dark:text-slate-100 dark:backdrop-blur-md dark:hover:bg-slate-900/55"
                 >
+                  {exportBusy === "pdf" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
                   Export PDF
-                </a>
+                </button>
                 <span
                   className={`rounded-full px-2.5 py-1 text-xs font-medium ${
                     pdfModeBadge === "latex"
@@ -1136,44 +1337,69 @@ export default function ReferenceOutlinePanel({
                 >
                   {pdfModeBadge === "latex" ? "PDF mode: LaTeX compiled" : pdfModeBadge === "fallback" ? "PDF mode: fallback possible" : "PDF mode: checking"}
                 </span>
-                <a
-                  href={`/api/projects/${projectId}/export?format=txt`}
-                  className="rounded-lg border border-slate-300/90 bg-white px-4 py-2 text-sm font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 dark:border-white/14 dark:bg-slate-950/45 dark:text-slate-100 dark:backdrop-blur-md dark:hover:bg-slate-900/55"
+                <button
+                  type="button"
+                  disabled={!!exportBusy}
+                  onClick={() => void runThesisExportDownload("txt")}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300/90 bg-white px-4 py-2 text-sm font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 disabled:opacity-60 dark:border-white/14 dark:bg-slate-950/45 dark:text-slate-100 dark:backdrop-blur-md dark:hover:bg-slate-900/55"
                 >
+                  {exportBusy === "txt" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
                   Export TXT
-                </a>
-                <a
-                  href={`/api/projects/${projectId}/export?format=md`}
-                  className="rounded-lg border border-slate-300/90 bg-white px-4 py-2 text-sm font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 dark:border-white/14 dark:bg-slate-950/45 dark:text-slate-100 dark:backdrop-blur-md dark:hover:bg-slate-900/55"
+                </button>
+                <button
+                  type="button"
+                  disabled={!!exportBusy}
+                  onClick={() => void runThesisExportDownload("md")}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300/90 bg-white px-4 py-2 text-sm font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 disabled:opacity-60 dark:border-white/14 dark:bg-slate-950/45 dark:text-slate-100 dark:backdrop-blur-md dark:hover:bg-slate-900/55"
                 >
+                  {exportBusy === "md" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
                   Export MD
-                </a>
-                <a
-                  href={`/api/projects/${projectId}/export?format=tex`}
-                  className="rounded-lg border border-slate-300/90 bg-white px-4 py-2 text-sm font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 dark:border-white/14 dark:bg-slate-950/45 dark:text-slate-100 dark:backdrop-blur-md dark:hover:bg-slate-900/55"
+                </button>
+                <button
+                  type="button"
+                  disabled={!!exportBusy}
+                  onClick={() => void runThesisExportDownload("tex")}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300/90 bg-white px-4 py-2 text-sm font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 disabled:opacity-60 dark:border-white/14 dark:bg-slate-950/45 dark:text-slate-100 dark:backdrop-blur-md dark:hover:bg-slate-900/55"
                 >
+                  {exportBusy === "tex" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
                   Export LaTeX
-                </a>
+                </button>
                 <Link
                   href={`/dashboard/projects/${projectId}/print`}
                   className="rounded-lg border border-slate-300/90 bg-white px-4 py-2 text-sm font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 dark:border-white/14 dark:bg-slate-950/45 dark:text-slate-100 dark:backdrop-blur-md dark:hover:bg-slate-900/55"
                 >
                   Print
                 </Link>
-                <div className="ml-auto flex items-center gap-2 pr-1 text-xs text-slate-500 dark:text-slate-400">
-                  <span className="truncate font-medium text-slate-800 dark:text-slate-200">{projectTitle}</span>
-                  <span>•</span>
-                  <span>{projectLanguage}</span>
-                </div>
               </div>
-              <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-                <strong className="text-slate-800 dark:text-slate-200">Export PDF</strong> typesets the same thesis{" "}
-                <code className="rounded bg-slate-100 px-1 text-slate-900 dark:bg-slate-800 dark:text-slate-100">report</code> source with{" "}
-                <strong className="text-slate-800 dark:text-slate-200">Tectonic</strong> (bundled after{" "}
-                <code className="rounded bg-slate-100 px-1 text-slate-900 dark:bg-slate-800 dark:text-slate-100">npm install</code>) when available, then{" "}
-                <code className="rounded bg-slate-100 px-1 text-slate-900 dark:bg-slate-800 dark:text-slate-100">pdflatex</code> if configured. If both fail, you get a plain preview PDF. Download{" "}
-                <code className="rounded bg-slate-100 px-1 text-slate-900 dark:bg-slate-800 dark:text-slate-100">.tex</code> for Overleaf / TeX Live.
-              </p>
+              {exportBanner && exportBanner.warnings.length > 0 ? (
+                <div className="mt-3 rounded-xl border border-amber-200/90 bg-amber-50/95 px-3 py-3 dark:border-amber-400/35 dark:bg-amber-950/40">
+                  <p className="text-sm font-semibold text-amber-950 dark:text-amber-100">{exportBanner.title}</p>
+                  {exportBanner.intro ? (
+                    <p className="mt-1 text-xs text-amber-900/90 dark:text-amber-100/85">{exportBanner.intro}</p>
+                  ) : null}
+                  <ul className="mt-2 max-h-48 list-disc space-y-1 overflow-y-auto pl-5 text-xs text-amber-950 dark:text-amber-50">
+                    {exportBanner.warnings.map((w) => (
+                      <li key={`${w.code}-${w.message.slice(0, 80)}`}>{w.message}</li>
+                    ))}
+                  </ul>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={!!exportBusy}
+                      onClick={() => void runThesisExportDownload(exportBanner.format as "pdf" | "tex" | "txt" | "md")}
+                      className="rounded-lg border border-amber-300/90 bg-white px-3 py-1.5 text-xs font-semibold text-amber-950 shadow-sm transition hover:bg-amber-100/80 disabled:opacity-50 dark:border-amber-500/40 dark:bg-amber-950/50 dark:text-amber-50 dark:hover:bg-amber-900/40"
+                    >
+                      Download again
+                    </button>
+                    <Link
+                      href={`/dashboard/projects/${projectId}/review`}
+                      className="rounded-lg border border-amber-300/90 bg-amber-100/80 px-3 py-1.5 text-xs font-semibold text-amber-950 shadow-sm transition hover:bg-amber-200/80 dark:border-amber-500/40 dark:bg-amber-900/50 dark:text-amber-50 dark:hover:bg-amber-800/40"
+                    >
+                      Review issues
+                    </Link>
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
             </div>

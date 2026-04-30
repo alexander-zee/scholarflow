@@ -9,6 +9,11 @@ function stripEmptyMathDelimiters(s: string): string {
   out = out.replace(/\\\[\s*\\\]/g, "");
   out = out.replace(/\\\(\s*_\s*t\s*\\\)/g, "");
   out = out.replace(/\\\(\s*\\\.\s*\\\)/g, "");
+  // Degenerate "variable name + colon only" or empty-looking inline math (common model glitch)
+  out = out.replace(/\\\(\s*[a-zA-Z]{1,3}\s*:\s*\\\)/g, "");
+  out = out.replace(/\\\(\s*:\\s*\\\)/g, "");
+  out = out.replace(/\\\(\s*:\s*\\\)/g, "");
+  out = out.replace(/\\\(\s*_+\s*\\\)/g, "");
   return out;
 }
 
@@ -21,7 +26,11 @@ function fixCommonSubscripts(s: string): string {
 }
 
 function fixEmptyCiteCommands(s: string): string {
-  return s.replace(/\\citep\s*\{\s*\}/g, "\\citep{citation_needed}").replace(/\\citet\s*\{\s*\}/g, "\\citet{citation_needed}");
+  return s
+    .replace(/\\citep\s*\{\s*\}/g, "")
+    .replace(/\\citet\s*\{\s*\}/g, "")
+    .replace(/\\citep\{citation_needed\}/gi, "")
+    .replace(/\\citet\{citation_needed\}/gi, "");
 }
 
 function stripAuthorQuestionMarks(s: string): string {

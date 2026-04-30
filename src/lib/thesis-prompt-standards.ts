@@ -5,6 +5,7 @@ export type ThesisChapterKind =
   | "methodology"
   | "results"
   | "discussion"
+  | "appendix"
   | "general";
 
 /** Econometrics-style depth (equations, SDF examples) — inject from Chapter 3 onward only. */
@@ -24,6 +25,7 @@ export function projectUsesEarlyChapterMathDelay(field: string) {
 
 export function inferThesisChapterKind(chapterTitle: string): ThesisChapterKind {
   const t = chapterTitle.toLowerCase();
+  if (/(appendix|supplement|supplementary\s+material|online\s+appendix)/i.test(t)) return "appendix";
   if (/(intro|introduction|overview|background\s+and\s+motivation)/i.test(t)) return "introduction";
   if (/(literature|related\s+work|prior\s+work|theoretical\s+background)/i.test(t)) return "literature";
   if (/(method|methodology|empirical\s+strateg|data\s+and\s+sample|econometric\s+setup|model\s+spec)/i.test(t)) return "methodology";
@@ -100,11 +102,57 @@ export const THESIS_INTRODUCTION_HQ_SECTIONS = [
   "Do not add a second \\section{Research Background}, second Research Objective block, or duplicate roadmap / problem framing elsewhere in this chapter.",
 ].join("\n");
 
+/** Legacy block; prefer `buildUploadOnlyCitationRules` from the full-draft pipeline. */
 export const THESIS_CITATION_RULES = [
   "Citations:",
-  "- Use plausible natbib keys: \\citep{AuthorYearTopic}, \\citet{AuthorYearTopic}.",
-  "- If no source exists for a claim, use \\citep{citation_needed} and/or line comment: % CITATION NEEDED: ...",
+  "- Prefer project-grounded keys (see dynamic citation block when sources are attached).",
+  "- If no source exists for a claim, paraphrase cautiously without a cite key; do not invent AuthorYear keys.",
+  '- Never output empty \\cite{}, \\citep{}, \\citet{}, \\parencite{}, \\textcite{}, \\autocite{}, or any citation command with an empty brace argument.',
+  '- If no valid uploaded key applies, write the plain phrase [citation needed] in running text — never an empty cite command.',
   '- Never output empty \\citep{}, fake "author?", or citation placeholders with question marks.',
+].join("\n");
+
+/** Natbib keys `uploaded1`…`uploadedN` align with `thesis-latex-export` bibliography generation. */
+export function buildUploadOnlyCitationRules(uploadedFileNames: string[]): string {
+  const names = uploadedFileNames.map((n) => n.trim()).filter(Boolean);
+  if (!names.length) {
+    return [
+      "Citations (no uploaded sources in this project):",
+      "- Do NOT invent \\citep{AuthorYear} or Angrist1996IV-style keys.",
+      "- Attribute prior work in narrative prose; you may use footnote-style \\footnote{...} with descriptive text only.",
+      "- Do NOT use \\citep{citation_needed}, empty \\cite{} / \\citep{} / \\citet{} / \\parencite{} / \\textcite{} / \\autocite{}, or bracket citations that imply a bibliography entry you cannot support.",
+      "- If you cannot cite, output [citation needed] as plain text, not an empty LaTeX citation command.",
+    ].join("\n");
+  }
+  const mapping = names
+    .map((name, i) => {
+      const key = `uploaded${i + 1}`;
+      return `[${i + 1}] = \\citep{${key}} → file: ${JSON.stringify(name)}`;
+    })
+    .join("\n");
+  const keys = names.map((_, i) => `uploaded${i + 1}`).join(", ");
+  return [
+    "Citations (STRICT — uploaded sources only):",
+    mapping,
+    `- The ONLY permitted \\citep / \\citet keys are: ${keys}.`,
+    "- Match each substantive empirical or literature claim to the numbered source whose excerpt best supports it.",
+    "- FORBIDDEN: any other \\citep{...} key, \\citep{citation_needed}, empty \\cite{} / \\citep{} / \\citet{} / \\parencite{} / \\textcite{} / \\autocite{}, or invented author–year keys.",
+    "- If no key fits, use plain [citation needed]; never empty citation braces.",
+    "- In prose you may also write bracket numbers [1]…[n] matching the same order as above.",
+  ].join("\n");
+}
+
+/** Full document schema the model must respect chapter-by-chapter (Abstract is separate). */
+export const THESIS_DOCUMENT_SCHEMA = [
+  "Thesis document schema (BSc/MSc STEM / econometrics style):",
+  "- Abstract: separate pass (no \\chapter here).",
+  "- Introduction: nested \\section and \\subsection; roadmap; research question; contribution.",
+  "- Literature review: thematic \\subsection blocks (theory, evidence, gap).",
+  "- Methodology: data, estimators, assumptions, equations (valid LaTeX) where appropriate.",
+  "- Results / analysis: MUST include \\subsection{Descriptive Results}, \\subsection{Model Results}, \\subsection{Robustness Checks} (titles may be lightly adapted but keep these three themes), at least one booktabs table, and at least one figure environment with \\label and in-text references using Figure~\\ref{...} / Table~\\ref{...}.",
+  "- Discussion / conclusion: implications, limitations, future work.",
+  "- References list: export builds the bibliography from your \\citep{uploadedN} keys — do not fabricate standalone \\bibitem text in chapter bodies.",
+  "- Appendix (when present): supplementary tables/figures/definitions tied to the thesis topic — no generic boilerplate about replacing illustrative numbers.",
 ].join("\n");
 
 export const THESIS_FILLER_BAN = [
@@ -114,17 +162,20 @@ export const THESIS_FILLER_BAN = [
 ].join("\n");
 
 export const THESIS_RESULTS_TABLE_GUIDE = [
-  "Results chapter expectations:",
-  "- Include at least two booktabs-style tables (\\begin{table}...\\begin{tabular}...\\toprule...\\midrule...\\bottomrule) even if cells use -- or [fill] for numbers the student will replace.",
-  "- After each major table, interpret: what improves, economic magnitude, statistical credibility, robustness, and remaining limitations.",
-  "- Include at least two figure placeholders for empirical plots/diagnostics as specified in the figure rules.",
+  "Results chapter expectations (mandatory structure):",
+  "- Use \\subsection{Descriptive Results}, \\subsection{Model Results}, and \\subsection{Robustness Checks} (headings may be slightly rephrased but must preserve these three themes).",
+  "- Include at least one booktabs-style table (\\begin{table}...\\begin{tabular}...\\toprule...\\midrule...\\bottomrule) with \\caption{...} and \\label{tab:...}.",
+  "- Include at least one \\begin{figure}...[\\end{figure} with \\caption and \\label{fig:...}; the prose must reference it as Figure~\\\\ref{fig:...} (never a bare Figure~ without \\\\ref).",
+  "- After each table and each figure, add at least one paragraph interpreting what the reader should learn.",
+  "- Prefer a second table and second figure when the topic supports it; label every float and cite it in text.",
 ].join("\n");
 
 export const THESIS_RESULTS_TABLE_GUIDE_HQ = [
   "Results chapter (high-quality mode):",
-  "- Include at least three booktabs tables with substantive illustrative or project-consistent numeric entries; avoid a table where every numeric cell is \"--\".",
-  "- After each table: what is estimated, statistical reading, economic/substantive reading, and caution/limitation.",
-  "- Prefer prose for extra plots if needed; the pipeline may attach pgfplots diagnostics.",
+  "- Same mandatory \\subsection themes as standard mode: Descriptive Results; Model Results; Robustness Checks.",
+  "- Include at least two booktabs tables with substantive numeric entries (illustrative is acceptable if clearly labeled in the caption as stylised for the thesis topic).",
+  "- Include at least two figure environments (TikZ/pgfplots preferred) each with \\caption, \\label, and in-text Figure~\\\\ref{...}.",
+  "- After each table and figure: estimation target, statistical reading, economic or substantive reading, and limitations.",
 ].join("\n");
 
 export function chapterKindGuidance(kind: ThesisChapterKind): string {
@@ -139,6 +190,13 @@ export function chapterKindGuidance(kind: ThesisChapterKind): string {
       return THESIS_RESULTS_TABLE_GUIDE;
     case "discussion":
       return "Discussion / conclusion: summary of findings; theoretical and practical implications; limitations; future research; firm final conclusion — still using \\section hierarchy, not one wall of text.";
+    case "appendix":
+      return [
+        "Appendix (must be substantive, topic-specific supplementary material):",
+        "- Use \\section blocks for e.g. Extended notation, Additional estimators, Robustness extensions, Variable dictionary, or Algorithmic detail tied to the thesis topic.",
+        "- Include at least one supplementary table OR one supplementary figure with captions/labels and interpretation paragraphs.",
+        "- Forbidden boilerplate: do not write sentences that only tell the student to replace illustrative magnitudes, synthetic values, or template completeness.",
+      ].join("\n");
     default:
       return "Use a deep hierarchy (\\section, \\subsection, \\subsubsection) appropriate to a BSc/MSc thesis chapter; avoid undifferentiated long paragraphs.";
   }

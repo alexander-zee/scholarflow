@@ -3,6 +3,12 @@ import { prisma } from "@/lib/prisma";
 export const FREE_REVIEW_LIMIT = 3;
 export const PRO_REVIEW_LIMIT = 60;
 export const ADMIN_REVIEW_LIMIT = 9999;
+export const FREE_THESIS_GENERATION_LIMIT = 3;
+export const PRO_THESIS_GENERATION_LIMIT = 12;
+export const ADMIN_THESIS_GENERATION_LIMIT = 9999;
+export const FREE_SUPERVISOR_SUGGESTION_LIMIT = 5;
+export const PRO_SUPERVISOR_SUGGESTION_LIMIT = 200;
+export const ADMIN_SUPERVISOR_SUGGESTION_LIMIT = 9999;
 
 function getAdminEmails() {
   return (process.env.ADMIN_EMAILS || "")
@@ -39,6 +45,10 @@ export async function getOrCreateUsageLimit(userId: string) {
       month: currentUsageMonth(),
       aiReviewsUsed: 0,
       aiReviewsLimit: FREE_REVIEW_LIMIT,
+      thesisGenerationsUsed: 0,
+      thesisGenerationsLimit: FREE_THESIS_GENERATION_LIMIT,
+      supervisorSuggestionsUsed: 0,
+      supervisorSuggestionsLimit: FREE_SUPERVISOR_SUGGESTION_LIMIT,
     };
   }
   const computedLimit = isAdminEmail(user?.email)
@@ -46,6 +56,16 @@ export async function getOrCreateUsageLimit(userId: string) {
     : user?.subscriptionPlan === "pro"
       ? PRO_REVIEW_LIMIT
       : FREE_REVIEW_LIMIT;
+  const computedThesisGenerationLimit = isAdminEmail(user?.email)
+    ? ADMIN_THESIS_GENERATION_LIMIT
+    : user?.subscriptionPlan === "pro"
+      ? PRO_THESIS_GENERATION_LIMIT
+      : FREE_THESIS_GENERATION_LIMIT;
+  const computedSupervisorSuggestionLimit = isAdminEmail(user?.email)
+    ? ADMIN_SUPERVISOR_SUGGESTION_LIMIT
+    : user?.subscriptionPlan === "pro"
+      ? PRO_SUPERVISOR_SUGGESTION_LIMIT
+      : FREE_SUPERVISOR_SUGGESTION_LIMIT;
 
   const month = currentUsageMonth();
   const existing = await prisma.usageLimit.findUnique({
@@ -53,10 +73,18 @@ export async function getOrCreateUsageLimit(userId: string) {
   });
 
   if (existing) {
-    if (existing.aiReviewsLimit !== computedLimit) {
+    if (
+      existing.aiReviewsLimit !== computedLimit ||
+      existing.thesisGenerationsLimit !== computedThesisGenerationLimit ||
+      existing.supervisorSuggestionsLimit !== computedSupervisorSuggestionLimit
+    ) {
       return prisma.usageLimit.update({
         where: { id: existing.id },
-        data: { aiReviewsLimit: computedLimit },
+        data: {
+          aiReviewsLimit: computedLimit,
+          thesisGenerationsLimit: computedThesisGenerationLimit,
+          supervisorSuggestionsLimit: computedSupervisorSuggestionLimit,
+        },
       });
     }
     return existing;
@@ -68,6 +96,10 @@ export async function getOrCreateUsageLimit(userId: string) {
       month,
       aiReviewsLimit: computedLimit,
       aiReviewsUsed: 0,
+      thesisGenerationsLimit: computedThesisGenerationLimit,
+      thesisGenerationsUsed: 0,
+      supervisorSuggestionsLimit: computedSupervisorSuggestionLimit,
+      supervisorSuggestionsUsed: 0,
     },
   });
 }
@@ -91,5 +123,49 @@ export async function incrementUsage(userId: string) {
   await prisma.usageLimit.update({
     where: { id: usage.id },
     data: { aiReviewsUsed: { increment: 1 } },
+  });
+}
+
+export async function ensureThesisGenerationAllowed(userId: string) {
+  const usage = await getOrCreateUsageLimit(userId);
+  if (usage.thesisGenerationsLimit >= ADMIN_THESIS_GENERATION_LIMIT) {
+    return { allowed: true, usage };
+  }
+  if (usage.thesisGenerationsUsed >= usage.thesisGenerationsLimit) {
+    return { allowed: false, usage };
+  }
+  return { allowed: true, usage };
+}
+
+export async function incrementThesisGenerationUsage(userId: string) {
+  const usage = await getOrCreateUsageLimit(userId);
+  if (usage.thesisGenerationsLimit >= ADMIN_THESIS_GENERATION_LIMIT) {
+    return;
+  }
+  await prisma.usageLimit.update({
+    where: { id: usage.id },
+    data: { thesisGenerationsUsed: { increment: 1 } },
+  });
+}
+
+export async function ensureSupervisorSuggestionAllowed(userId: string) {
+  const usage = await getOrCreateUsageLimit(userId);
+  if (usage.supervisorSuggestionsLimit >= ADMIN_SUPERVISOR_SUGGESTION_LIMIT) {
+    return { allowed: true, usage };
+  }
+  if (usage.supervisorSuggestionsUsed >= usage.supervisorSuggestionsLimit) {
+    return { allowed: false, usage };
+  }
+  return { allowed: true, usage };
+}
+
+export async function incrementSupervisorSuggestionUsage(userId: string) {
+  const usage = await getOrCreateUsageLimit(userId);
+  if (usage.supervisorSuggestionsLimit >= ADMIN_SUPERVISOR_SUGGESTION_LIMIT) {
+    return;
+  }
+  await prisma.usageLimit.update({
+    where: { id: usage.id },
+    data: { supervisorSuggestionsUsed: { increment: 1 } },
   });
 }

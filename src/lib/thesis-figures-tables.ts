@@ -261,7 +261,7 @@ export function appendixIllustrativeExtraFigure(): string {
 \label{fig:appendix_sens}
 \end{figure}
 
-Figure~\ref{fig:appendix_sens} should be replaced with genuine robustness estimates or alternative estimators.`;
+Figure~\\ref{fig:appendix_sens} summarises an appendix-only sensitivity illustration; align the pattern with your empirical robustness design.`;
 }
 
 export function appendixIllustrativeExtraTable(): string {

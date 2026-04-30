@@ -30,7 +30,7 @@ function figureBlock(args: { caption: string; label: string; bodyHint: string })
     \\fbox{
         \\begin{minipage}[c][6cm][c]{0.85\\textwidth}
             \\centering
-            \\textbf{Placeholder Figure}\\\\
+            \\textbf{Schematic figure (replace with final artwork)}\\\\
             ${hint}
         \\end{minipage}
     }

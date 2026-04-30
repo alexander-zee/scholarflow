@@ -80,6 +80,35 @@ model Project {
   documentSections DocumentSection[]
   feedbackReports FeedbackReport[]
   referencePapers ReferencePaper[]
+  fullDraftJobs   FullDraftJob[]
+}
+
+model FullDraftJob {
+  id               String   @id @default(cuid())
+  projectId        String
+  userId           String
+  status           String   @default("queued")
+  progress         Int      @default(0)
+  lastStep         String?
+  failedStep       String?
+  message          String?  @db.Text
+  details          String?  @db.Text
+  errorStack       String?  @db.Text
+  skippedSources   Json?
+  requestPayload   Json
+  sourcesTotal     Int?
+  modelPrimary     String?
+  modelFallback    String?
+  referenceChars   Int?
+  resultSections   Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([userId])
 }
 
 model ReferencePaper {
@@ -130,6 +159,10 @@ model UsageLimit {
   month         String
   aiReviewsUsed Int      @default(0)
   aiReviewsLimit Int     @default(3)
+  thesisGenerationsUsed Int      @default(0)
+  thesisGenerationsLimit Int     @default(3)
+  supervisorSuggestionsUsed Int   @default(0)
+  supervisorSuggestionsLimit Int  @default(5)
 
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 

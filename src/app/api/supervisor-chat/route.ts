@@ -3,7 +3,12 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { openai } from "@/lib/openai";
-import { ensureUsageAllowed, incrementUsage } from "@/lib/usage";
+import {
+  ensureSupervisorSuggestionAllowed,
+  ensureUsageAllowed,
+  incrementSupervisorSuggestionUsage,
+  incrementUsage,
+} from "@/lib/usage";
 import { getFallbackModel, getModel } from "@/lib/ai-config";
 import {
   parseGraphTableProposal,
@@ -610,6 +615,18 @@ export async function POST(request: Request) {
 
   const chatHistory = payload.data.chatHistory || [];
   const interaction = payload.data.supervisorInteraction;
+  const isSupervisorSuggestionAction = interaction === "single_suggestion" || interaction === "figure_proposal";
+
+  if (isSupervisorSuggestionAction) {
+    const suggestionUsageCheck = await ensureSupervisorSuggestionAllowed(session.user.id);
+    if (!suggestionUsageCheck.allowed) {
+      return NextResponse.json(
+        { error: "Monthly AI supervisor suggestion limit reached. Upgrade in pricing.", redirectTo: "/pricing" },
+        { status: 402 },
+      );
+    }
+  }
+
   const context = buildContext(payload.data.draftText, payload.data.question, payload.data.selectedText);
 
   const paperQuery =
@@ -826,6 +843,7 @@ ${rawFigure.slice(0, 12000)}
     }
 
     await incrementUsage(session.user.id);
+    await incrementSupervisorSuggestionUsage(session.user.id);
     return NextResponse.json({
       mode: "figure_proposal",
       proposal,
@@ -865,6 +883,9 @@ ${rawFigure.slice(0, 12000)}
       parsed = trimSingleSuggestionPayload(parsed);
     }
     await incrementUsage(session.user.id);
+    if (interaction === "single_suggestion") {
+      await incrementSupervisorSuggestionUsage(session.user.id);
+    }
     return NextResponse.json({
       mode: "structured",
       payload: parsed,
@@ -897,6 +918,9 @@ ${rawFigure.slice(0, 12000)}
   answer = enforceEvidenceGrounding(answer, payload.data.draftText);
 
   await incrementUsage(session.user.id);
+  if (interaction === "single_suggestion") {
+    await incrementSupervisorSuggestionUsage(session.user.id);
+  }
 
   return NextResponse.json({
     mode: "legacy",

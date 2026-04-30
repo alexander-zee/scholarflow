@@ -2,8 +2,9 @@ import type { ReviewMode } from "@/lib/review-modes";
 
 const DEFAULT_INPUT_CHAR_LIMIT = 350000;
 const DEFAULT_INPUT_WORD_LIMIT = 50000;
-const DEFAULT_MODEL = "gpt-4.1-mini";
-const DEFAULT_FALLBACK_MODEL = "gpt-4o-mini";
+/** Use strongest broadly available defaults; override via env when newer models are enabled. */
+const DEFAULT_MODEL = "gpt-4.1";
+const DEFAULT_FALLBACK_MODEL = "gpt-4o";
 
 const modeTokenCaps: Record<ReviewMode, number> = {
   full_review: 1100,

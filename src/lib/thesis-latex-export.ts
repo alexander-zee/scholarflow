@@ -1,6 +1,6 @@
 import { escapeLatex } from "@/lib/latex-escape";
 import { sanitizeThesisLatexMath } from "@/lib/latex-math-sanitize";
-import { buildThesisAppendixAfterReferences } from "@/lib/thesis-figures-tables";
+import { sanitizeBlankCitationsInLatex } from "@/lib/thesis-citation-sanitize";
 
 /** True when content is already model-generated LaTeX (must not run through escapeLatex). */
 export function looksLikeLatexBody(s: string): boolean {
@@ -18,13 +18,14 @@ export function looksLikeLatexBody(s: string): boolean {
 export function sectionContentToLatexBody(content: string): string {
   const t = content.trim();
   if (!t) return "\\textit{(empty section)}";
-  if (looksLikeLatexBody(t)) return t;
-  return t
+  if (looksLikeLatexBody(t)) return sanitizeBlankCitationsInLatex(t).text;
+  const plain = t
     .split(/\n{2,}/g)
     .map((p) => p.trim())
     .filter(Boolean)
     .map((p) => escapeLatex(p))
     .join("\n\n");
+  return sanitizeBlankCitationsInLatex(plain).text;
 }
 
 /** Conservative plain-text fallback when model LaTeX is malformed and fails compilation. */
@@ -69,7 +70,7 @@ export function collectNatbibCiteKeysFromBodies(sections: { content: string }[])
     while ((m = re.exec(copy)) !== null) {
       for (const part of m[1].split(",")) {
         const key = part.trim();
-        if (key) set.add(key);
+        if (key.length > 0) set.add(key);
       }
     }
   }
@@ -82,7 +83,7 @@ function buildUploadedBibitems(names: string[]): string {
     .map((name, i) => {
       const key = `uploaded${i + 1}`;
       const label = escapeLatex(name);
-      return `\\bibitem{${key}}\\textit{${label}}. Project-uploaded source — replace with a full bibliographic entry.`;
+      return `\\bibitem{${key}}\\textit{${label}}. Project-uploaded source; complete full bibliographic metadata before submission.`;
     })
     .join("\n\n");
 }
@@ -105,7 +106,7 @@ function buildCiteKeyPlaceholders(keys: string[]): string {
     }
     seen.add(key);
     const display = escapeLatex(k);
-    lines.push(`\\bibitem{${key}}${display}. \\textit{[Placeholder — complete this reference.]}`);
+    lines.push(`\\bibitem{${key}}${display}. \\textit{Verify and complete this bibliographic entry before submission.}`);
   }
   return lines.join("\n\n");
 }
@@ -282,8 +283,6 @@ ${chapterBlocks}
 ${bibliographyBlock}
 
 \\end{thebibliography}
-
-${buildThesisAppendixAfterReferences()}
 
 \\end{document}
 `;

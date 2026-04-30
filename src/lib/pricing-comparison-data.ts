@@ -8,21 +8,21 @@ export const FEATURE_LABELS = [
 ] as const;
 
 export const FREE_VALUES = [
-  "3",
-  "1",
-  "Basic outline + draft",
-  "Limited",
+  "3 AI reviews / month",
+  "1 active project",
+  "3 full thesis generations / month",
+  "5 supervisor suggestions / month",
   "PDF, Markdown, LaTeX",
   "Trying the workflow",
 ] as const;
 
 export const PRO_VALUES = [
-  "Higher monthly limits",
-  "Multiple",
-  "Full thesis generation",
-  "Full supervisor-style review",
+  "60 AI reviews / month",
+  "Multiple active projects",
+  "12 full thesis generations / month",
+  "200 supervisor suggestions / month",
   "PDF, Markdown, LaTeX, print",
-  "Serious revision cycles",
+  "Submission-ready revision cycles",
 ] as const;
 
 export const PRO_MONTHLY = 19;

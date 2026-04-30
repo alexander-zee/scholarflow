@@ -56,7 +56,7 @@ function ComparisonRows({ values }: { values: readonly string[] }) {
         {values.map((value, idx) => (
           <div
             key={`d-${idx}`}
-            className="flex h-14 items-center border-b border-slate-200/70 text-left text-sm text-slate-800 last:border-b-0 dark:border-white/[0.06] dark:text-slate-200"
+            className="flex min-h-[3.5rem] items-center border-b border-slate-200/70 py-2 text-left text-sm text-slate-800 last:border-b-0 dark:border-white/[0.06] dark:text-slate-200"
           >
             {value}
           </div>
@@ -68,12 +68,12 @@ function ComparisonRows({ values }: { values: readonly string[] }) {
 
 function LabelColumn() {
   return (
-    <div className="hidden flex-col lg:flex">
+    <div className="hidden flex-col pt-8 lg:flex">
       <div className="mb-6 min-h-[168px]" aria-hidden />
       {FEATURE_LABELS.map((label) => (
         <div
           key={label}
-          className="flex h-14 items-center border-b border-slate-200/70 text-left text-sm text-slate-600 last:border-b-0 dark:border-white/[0.06] dark:text-slate-400"
+          className="flex min-h-[3.5rem] items-center border-b border-slate-200/70 py-2 text-left text-sm text-slate-600 last:border-b-0 dark:border-white/[0.06] dark:text-slate-400"
         >
           {label}
         </div>
@@ -108,10 +108,10 @@ export default function PricingComparison({ titleLevel = "h2", className = "" }:
             aria-label="Toggle annual billing"
             aria-checked={billing === "annual"}
             onClick={() => setBilling((current) => (current === "monthly" ? "annual" : "monthly"))}
-            className="relative inline-flex h-9 w-16 shrink-0 items-center rounded-full border border-cyan-500/30 bg-white/80 p-1 transition-colors dark:border-cyan-400/20 dark:bg-slate-900/50"
+            className="relative inline-flex h-9 w-16 shrink-0 items-center rounded-full border border-blue-500/30 bg-white/80 p-1 transition-colors dark:border-blue-400/25 dark:bg-slate-900/50"
           >
             <span
-              className={`inline-block h-7 w-7 rounded-full bg-cyan-400 shadow-sm transition-transform ${
+              className={`inline-block h-7 w-7 rounded-full bg-blue-500 shadow-sm transition-transform dark:bg-blue-400 ${
                 billing === "annual" ? "translate-x-7" : "translate-x-0"
               }`}
             />
@@ -139,8 +139,8 @@ export default function PricingComparison({ titleLevel = "h2", className = "" }:
 
         <article className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border border-slate-200/90 bg-white/65 p-6 backdrop-blur-xl dark:border-white/[0.10] dark:bg-slate-900/45 lg:p-8">
           <PriceBand plan="FREE" note="Start validating your thesis workflow.">
-            <p className="text-5xl font-semibold leading-none tracking-tight text-slate-950 drop-shadow-sm dark:text-white dark:drop-shadow-[0_0_18px_rgba(34,211,238,0.12)]">
-              <span className="text-cyan-600 dark:text-cyan-300">$</span>0
+            <p className="text-5xl font-semibold leading-none tracking-tight text-slate-950 drop-shadow-sm dark:text-white dark:drop-shadow-[0_0_18px_rgba(59,130,246,0.12)]">
+              <span className="text-blue-600 dark:text-blue-300">$</span>0
             </p>
           </PriceBand>
           <div className="flex min-h-0 flex-1 flex-col">
@@ -148,14 +148,14 @@ export default function PricingComparison({ titleLevel = "h2", className = "" }:
           </div>
           <Link
             href="/auth/signup"
-            className="mt-8 block w-full rounded-full bg-cyan-500 py-3 text-center text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 lg:mt-auto"
+            className="mt-8 block w-full rounded-full bg-blue-600 py-3 text-center text-sm font-semibold text-white transition hover:bg-blue-500 lg:mt-auto"
           >
             Get started
           </Link>
         </article>
 
-        <article className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border border-cyan-500/35 bg-white/70 p-6 pb-8 pt-12 shadow-[0_12px_48px_-24px_rgba(14,165,233,0.15)] backdrop-blur-xl dark:border-cyan-400/35 dark:bg-slate-900/45 dark:shadow-[0_0_70px_rgba(34,211,238,0.12)] lg:p-8 lg:pt-10">
-          <span className="absolute right-5 top-5 z-10 rounded-full border border-cyan-500/45 bg-cyan-100/80 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-cyan-900 dark:border-cyan-400/40 dark:bg-cyan-500/15 dark:text-cyan-200">
+        <article className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border border-blue-500/35 bg-white/70 p-6 pb-8 shadow-[0_12px_48px_-24px_rgba(59,130,246,0.2)] backdrop-blur-xl dark:border-blue-400/35 dark:bg-slate-900/45 dark:shadow-[0_0_70px_rgba(59,130,246,0.16)] lg:p-8">
+          <span className="absolute right-5 top-5 z-10 rounded-full border border-blue-500/45 bg-blue-100/80 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-blue-900 dark:border-blue-400/40 dark:bg-blue-500/15 dark:text-blue-200">
             Recommended
           </span>
           <PriceBand
@@ -165,14 +165,14 @@ export default function PricingComparison({ titleLevel = "h2", className = "" }:
             }
           >
             {billing === "monthly" ? (
-              <p className="text-5xl font-semibold leading-none tracking-tight text-slate-950 drop-shadow-sm dark:text-white dark:drop-shadow-[0_0_18px_rgba(34,211,238,0.15)]">
+              <p className="text-5xl font-semibold leading-none tracking-tight text-slate-950 drop-shadow-sm dark:text-white dark:drop-shadow-[0_0_18px_rgba(59,130,246,0.15)]">
                 $<span className="text-slate-950 dark:text-white">{PRO_MONTHLY}</span>
-                <span className="text-2xl font-semibold text-cyan-700 md:text-3xl dark:text-cyan-300">/mo</span>
+                <span className="text-2xl font-semibold text-blue-700 md:text-3xl dark:text-blue-300">/mo</span>
               </p>
             ) : (
-              <p className="text-5xl font-semibold leading-none tracking-tight text-slate-950 drop-shadow-sm dark:text-white dark:drop-shadow-[0_0_18px_rgba(34,211,238,0.15)]">
+              <p className="text-5xl font-semibold leading-none tracking-tight text-slate-950 drop-shadow-sm dark:text-white dark:drop-shadow-[0_0_18px_rgba(59,130,246,0.15)]">
                 $<span className="text-slate-950 dark:text-white">15</span>
-                <span className="text-2xl font-semibold text-cyan-700 md:text-3xl dark:text-cyan-300">/mo</span>
+                <span className="text-2xl font-semibold text-blue-700 md:text-3xl dark:text-blue-300">/mo</span>
               </p>
             )}
           </PriceBand>
@@ -181,7 +181,7 @@ export default function PricingComparison({ titleLevel = "h2", className = "" }:
           </div>
           <UpgradeToProButton
             billing={billing}
-            className="mt-8 block w-full rounded-full bg-gradient-to-r from-cyan-400 to-teal-300 py-3 text-center text-sm font-semibold text-slate-950 shadow-[0_0_30px_rgba(34,211,238,0.25)] transition hover:brightness-110 disabled:opacity-70 lg:mt-auto"
+            className="mt-8 block w-full rounded-full bg-blue-600 py-3 text-center text-sm font-semibold text-white shadow-[0_0_22px_rgba(59,130,246,0.22)] transition hover:bg-blue-500 disabled:opacity-70 lg:mt-auto"
           >
             Upgrade to Pro
           </UpgradeToProButton>
