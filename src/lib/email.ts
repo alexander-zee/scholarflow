@@ -44,3 +44,55 @@ export async function sendVerificationEmail(email: string, token: string) {
 
   return { sent: true, verificationUrl };
 }
+
+export async function sendThesisDraftCompleteEmail(
+  email: string,
+  args: { projectTitle: string; projectUrlPath: string },
+): Promise<{ sent: boolean }> {
+  const projectUrl = `${appBaseUrl()}${args.projectUrlPath.startsWith("/") ? "" : "/"}${args.projectUrlPath}`;
+
+  const host = process.env.EMAIL_SERVER_HOST;
+  const port = Number(process.env.EMAIL_SERVER_PORT || "587");
+  const user = process.env.EMAIL_SERVER_USER;
+  const pass = process.env.EMAIL_SERVER_PASSWORD;
+  const from = process.env.EMAIL_FROM || "ThesisPilot <no-reply@thesispilot.local>";
+
+  if (!host || !user || !pass) {
+    console.log("[email] thesis_draft_complete skipped (SMTP not configured)", { to: email });
+    return { sent: false };
+  }
+
+  try {
+    const transport = nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: { user, pass },
+    });
+
+    await transport.sendMail({
+      from,
+      to: email,
+      subject: `ThesisPilot: draft ready — ${args.projectTitle.slice(0, 80)}`,
+      html: `
+      <div style="font-family: Arial, sans-serif; line-height:1.5">
+        <h2>Your thesis draft is ready</h2>
+        <p>Full draft generation finished for <strong>${args.projectTitle
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")}</strong>.</p>
+        <p>
+          <a href="${projectUrl}" style="display:inline-block;padding:10px 16px;background:#0ea5e9;color:#fff;border-radius:8px;text-decoration:none;">
+            Open project
+          </a>
+        </p>
+        <p>If you did not request this email, you can ignore it.</p>
+      </div>
+    `,
+    });
+    return { sent: true };
+  } catch (err) {
+    console.error("[email] thesis_draft_complete failed", err);
+    return { sent: false };
+  }
+}

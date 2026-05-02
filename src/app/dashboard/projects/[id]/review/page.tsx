@@ -1450,9 +1450,18 @@ export default function ProjectReviewPage() {
         );
         return;
       }
+      if (data.mode === "legacy" && typeof data.answer === "string" && data.answer.trim()) {
+        setChatMessages((prev) => [
+          ...prev,
+          { role: "assistant", kind: "text", content: data.answer.trim() },
+        ]);
+      }
       setSuggestionWalkthrough({
         phase: "empty",
-        hint: "Supervisor returned plain text for this round — use chat or full review.",
+        hint:
+          data.mode === "legacy"
+            ? "No structured edit steps this round (plain-text reply). Use chat or “Full review”, or try Suggestions again."
+            : "Supervisor returned plain text for this round — use chat or full review.",
       });
     } catch {
       setChatError("Suggestions request failed.");

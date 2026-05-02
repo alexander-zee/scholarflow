@@ -63,6 +63,56 @@ function filenameFromExportResponse(res: Response, fallback: string) {
   return m?.[1]?.trim() || fallback;
 }
 
+function summarizeSkippedSources(skipped: { filename: string; reason: string }[], maxItems = 8) {
+  const unique = new Map<string, number>();
+  for (const item of skipped) {
+    const key = `${item.filename} (${item.reason})`;
+    unique.set(key, (unique.get(key) || 0) + 1);
+  }
+  const entries = [...unique.entries()];
+  const shown = entries.slice(0, maxItems).map(([k, n]) => (n > 1 ? `${k} ×${n}` : k));
+  const remaining = Math.max(0, entries.length - maxItems);
+  return `Skipped sources (${skipped.length}): ${shown.join("; ")}${remaining > 0 ? `; +${remaining} more` : ""}`;
+}
+
+function prettifyDraftStep(lastStep?: string | null, message?: string | null) {
+  const step = (lastStep || "").trim();
+  const detail = (message || "").trim();
+  if (detail) return detail;
+  switch (step) {
+    case "loading_sources":
+      return "Loading project inputs and references";
+    case "extracting_sources":
+      return "Extracting and ranking source snippets";
+    case "planning_outline":
+      return "Validating and expanding chapter outline";
+    case "drafting_chapters":
+      return "Drafting chapters (one chapter at a time)";
+    case "validating_quality":
+      return "Running quality gate checks and repairs";
+    case "assembling_document":
+      return "Assembling final draft sections";
+    default:
+      return step ? step.replace(/_/g, " ") : "";
+  }
+}
+
+function parseGenerationFailure(details?: string | null) {
+  if (!details) return null;
+  try {
+    const parsed = JSON.parse(details) as { errorDetails?: string };
+    if (!parsed.errorDetails) return null;
+    const nested = JSON.parse(parsed.errorDetails) as {
+      qualityFailureReport?: { scope: string; code: string; detail: string }[];
+    };
+    const failures = nested.qualityFailureReport || [];
+    if (failures.length === 0) return null;
+    return failures.map((f) => `${f.scope}: ${f.detail}`).join("\n");
+  } catch {
+    return null;
+  }
+}
+
 function paperResultToHit(p: PaperResult, idx: number): ScholarListHit {
   const isGuidance = p.source === "search_guidance";
   const displayUrl =
@@ -123,6 +173,19 @@ const SEMANTIC_SCHOLAR_FIELDS = [
 ] as const;
 
 const DEFAULT_SEMANTIC_FIELDS: string[] = ["Economics", "Mathematics"];
+
+/**
+ * Appended to every workspace prompt for server parity (must match `buildComposedPrompt` body).
+ * Long enough that an "empty" textarea still yields a valid-length payload for the full-draft API.
+ */
+const FIXED_THESIS_SETTINGS_BLOCK = [
+  "Pages (UI setting): 40",
+  "Citation style (UI setting): APA",
+  "Citation level (UI setting): Standard",
+  "Citation coverage (UI setting): Balanced (50%)",
+  "Document language (UI setting): English",
+  "Email on completion (UI setting): no",
+].join("\n");
 
 /** Left column setting cards — grey-blue ThesisPilot workspace */
 const settingsCardClass =
@@ -236,6 +299,7 @@ export default function ReferenceOutlinePanel({
 }) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const fullDraftFeedbackRef = useRef<HTMLDivElement | null>(null);
 
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -250,7 +314,7 @@ export default function ReferenceOutlinePanel({
   const [citationStyle, setCitationStyle] = useState("APA");
   const [citationLevel, setCitationLevel] = useState("Standard");
   const [citationCoverage, setCitationCoverage] = useState(50);
-  const [documentLanguage, setDocumentLanguage] = useState("English");
+  const [documentLanguage, setDocumentLanguage] = useState(() => projectLanguage?.trim() || "English");
   const [emailOnComplete, setEmailOnComplete] = useState(false);
   const [expandedSetting, setExpandedSetting] = useState<string | null>(null);
   const [showBottomActionBar, setShowBottomActionBar] = useState(hasOutline);
@@ -284,24 +348,38 @@ export default function ReferenceOutlinePanel({
 
   const effectiveReferenceCount = references.length + referenceCountDelta;
   const promptWordCount = useMemo(() => prompt.trim().split(/\s+/).filter(Boolean).length, [prompt]);
+  const composedPromptWordCount = useMemo(() => {
+    const trimmed = prompt.trim();
+    const semanticBlock =
+      semanticFieldsInPrompt && semanticSelectedFields.length > 0
+        ? `\nAcademic search field boost (UI): ${[...semanticSelectedFields].sort().join(", ")}`
+        : "";
+    const composed = `${trimmed}${semanticBlock}\n\n${FIXED_THESIS_SETTINGS_BLOCK}`;
+    return composed.trim().split(/\s+/).filter(Boolean).length;
+  }, [prompt, semanticFieldsInPrompt, semanticSelectedFields]);
   const canGenerate = useMemo(() => {
-    const validByPrompt = promptWordCount >= 8;
+    const validByUserPrompt = promptWordCount >= 8;
+    const validByComposedReady = composedPromptWordCount >= 8 && effectiveReferenceCount >= 1;
     const validByTitleAndSource = projectTitle.trim().length >= 5 && effectiveReferenceCount >= 1;
     const validBySources = effectiveReferenceCount >= 3;
-    return validByPrompt || validByTitleAndSource || validBySources;
-  }, [promptWordCount, projectTitle, effectiveReferenceCount]);
+    return validByUserPrompt || validByComposedReady || validByTitleAndSource || validBySources;
+  }, [promptWordCount, composedPromptWordCount, projectTitle, effectiveReferenceCount]);
   const selectedPages = pages;
   const recommendedReferenceCount = selectedPages * 2;
   const hasEnoughReferences = references.length >= recommendedReferenceCount;
-  const citationCoverageLabel =
-    citationCoverage < 35 ? "Narrow" : citationCoverage < 70 ? "Balanced" : "Broad";
 
   useEffect(() => {
     let cancelled = false;
     async function checkPdfMode() {
       try {
         const res = await fetch(`/api/projects/${projectId}/export?format=pdf&probe=1`, { cache: "no-store" });
-        const json = (await res.json()) as { mode?: string };
+        const raw = await res.text();
+        let json: { mode?: string } = {};
+        try {
+          json = raw ? (JSON.parse(raw) as { mode?: string }) : {};
+        } catch {
+          json = {};
+        }
         if (cancelled) return;
         setPdfModeBadge(json.mode === "tectonic" || json.mode === "pdflatex" ? "latex" : "fallback");
       } catch {
@@ -318,6 +396,16 @@ export default function ReferenceOutlinePanel({
   useEffect(() => {
     setReferenceCountDelta(0);
   }, [references.length]);
+
+  useEffect(() => {
+    const next = projectLanguage?.trim();
+    if (next) setDocumentLanguage(next);
+  }, [projectLanguage]);
+
+  useEffect(() => {
+    if (!error) return;
+    fullDraftFeedbackRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [error]);
 
   async function runThesisExportDownload(format: "pdf" | "tex" | "txt" | "md") {
     setExportBusy(format);
@@ -357,19 +445,12 @@ export default function ReferenceOutlinePanel({
   }
 
   function buildComposedPrompt() {
-    const settingsBlock = [
-      `Pages (UI setting): ${pages}`,
-      `Citation style (UI setting): ${citationStyle}`,
-      `Citation level (UI setting): ${citationLevel}`,
-      `Citation coverage (UI setting): ${citationCoverageLabel} (${citationCoverage}%)`,
-      `Document language (UI setting): ${documentLanguage}`,
-      `Email on completion (UI setting): ${emailOnComplete ? "yes" : "no"}`,
-    ].join("\n");
+    const trimmed = prompt.trim();
     const semanticBlock =
       semanticFieldsInPrompt && semanticSelectedFields.length > 0
         ? `\nAcademic search field boost (UI): ${[...semanticSelectedFields].sort().join(", ")}`
         : "";
-    return `${prompt.trim()}${semanticBlock}\n\n${settingsBlock}`;
+    return `${trimmed}${semanticBlock}\n\n${FIXED_THESIS_SETTINGS_BLOCK}`;
   }
 
   function toggleSemanticField(field: string) {
@@ -478,12 +559,32 @@ export default function ReferenceOutlinePanel({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ papers: toImport }),
+          credentials: "include",
         });
-        const importJson = (await importResponse.json()) as {
+        const importContentType = importResponse.headers.get("content-type") || "";
+        const importRaw = await importResponse.text();
+        let importJson: {
           error?: string;
           created?: number;
           sourceIdsAdded?: string[];
-        };
+        } = {};
+        try {
+          importJson = importRaw
+            ? (JSON.parse(importRaw) as {
+                error?: string;
+                created?: number;
+                sourceIdsAdded?: string[];
+              })
+            : {};
+        } catch {
+          importJson = {
+            error: "Import failed (server returned non-JSON response).",
+          };
+        }
+        if (importResponse.redirected || importContentType.includes("text/html")) {
+          setError("Your session likely expired. Refresh this page and sign in again, then retry import.");
+          return;
+        }
         if (!importResponse.ok) {
           setError(importJson.error || "Import failed after semantic search.");
         } else {
@@ -529,8 +630,20 @@ export default function ReferenceOutlinePanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ papers: [hit.raw] }),
+        credentials: "include",
       });
-      const json = (await response.json()) as { error?: string; created?: number; sourceIdsAdded?: string[] };
+      const contentType = response.headers.get("content-type") || "";
+      const raw = await response.text();
+      let json: { error?: string; created?: number; sourceIdsAdded?: string[] } = {};
+      try {
+        json = raw ? (JSON.parse(raw) as { error?: string; created?: number; sourceIdsAdded?: string[] }) : {};
+      } catch {
+        json = { error: "Import failed (server returned non-JSON response)." };
+      }
+      if (response.redirected || contentType.includes("text/html")) {
+        setError("Your session likely expired. Refresh this page and sign in again, then retry import.");
+        return;
+      }
       if (!response.ok) {
         setError(json.error || "Import failed.");
         return;
@@ -563,8 +676,20 @@ export default function ReferenceOutlinePanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ papers: toImport }),
+        credentials: "include",
       });
-      const json = (await response.json()) as { error?: string; created?: number; sourceIdsAdded?: string[] };
+      const contentType = response.headers.get("content-type") || "";
+      const raw = await response.text();
+      let json: { error?: string; created?: number; sourceIdsAdded?: string[] } = {};
+      try {
+        json = raw ? (JSON.parse(raw) as { error?: string; created?: number; sourceIdsAdded?: string[] }) : {};
+      } catch {
+        json = { error: "Import failed (server returned non-JSON response)." };
+      }
+      if (response.redirected || contentType.includes("text/html")) {
+        setError("Your session likely expired. Refresh this page and sign in again, then retry import.");
+        return;
+      }
       if (!response.ok) {
         setError(json.error || "Import failed.");
         return;
@@ -641,17 +766,17 @@ export default function ReferenceOutlinePanel({
     setError("");
     setMessage("");
     if (!canGenerate) {
-      setError("Provide either a meaningful prompt (>= 8 words), a project title with one source, or at least 3 sources.");
+      setError(
+        "Add at least one uploaded source (the workspace still sends a valid prompt), or type 8+ words here, or use a project title of 5+ characters with 1+ source, or upload 3+ sources.",
+      );
       return;
     }
-    const composedPrompt = buildComposedPrompt();
-
     setBusy("outline");
     try {
       const response = await fetch(`/api/projects/${projectId}/outline`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: composedPrompt }),
+        body: JSON.stringify({ prompt: buildComposedPrompt() }),
       });
       const json = await response.json();
       if (!response.ok) {
@@ -674,20 +799,41 @@ export default function ReferenceOutlinePanel({
     }
   }
 
+  function handleGenerateFullDraftClick() {
+    console.log("[full-draft-ui] generate_click", {
+      busy,
+      canGenerate,
+      promptWords: promptWordCount,
+      composedPromptWords: composedPromptWordCount,
+      effectiveSources: effectiveReferenceCount,
+      hasOutline,
+    });
+    void generateFullDraft();
+  }
+
   async function generateFullDraft() {
     setError("");
     setMessage("");
     setDraftJobStep("");
     console.log("[full-draft-ui] validation", {
       promptWords: promptWordCount,
+      composedPromptWords: composedPromptWordCount,
       effectiveSources: effectiveReferenceCount,
       canGenerate,
     });
     if (!canGenerate) {
-      setError("Provide either a meaningful prompt (>= 8 words), a project title with one source, or at least 3 sources.");
+      setError(
+        "Add at least one uploaded source (the workspace still sends a valid prompt), or type 8+ words here, or use a project title of 5+ characters with 1+ source, or upload 3+ sources.",
+      );
+      console.warn("[full-draft-ui] generate_blocked_validation", {
+        promptWords: promptWordCount,
+        composedPromptWords: composedPromptWordCount,
+        effectiveSources: effectiveReferenceCount,
+        projectTitleLen: projectTitle.trim().length,
+      });
       return;
     }
-    const composedPrompt = buildComposedPrompt();
+    const draftBody = { prompt: buildComposedPrompt(), highQualityThesis: true as const };
 
     setBusy("draft");
     setDraftProgress(2);
@@ -708,12 +854,18 @@ export default function ReferenceOutlinePanel({
 
     try {
       if (!hasOutline) {
-        const outlineResponse = await fetch(`/api/projects/${projectId}/outline`, {
+        const outlineUrl = `/api/projects/${projectId}/outline`;
+        console.log("[full-draft-ui] outline_request", { url: outlineUrl, method: "POST" });
+        const outlineResponse = await fetch(outlineUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt: composedPrompt }),
+          body: JSON.stringify({ prompt: buildComposedPrompt() }),
         });
         const outlineJson = (await outlineResponse.json()) as { error?: string; redirectTo?: string };
+        console.log("[full-draft-ui] outline_response", {
+          ok: outlineResponse.ok,
+          status: outlineResponse.status,
+        });
         if (!outlineResponse.ok) {
           if (outlineResponse.status === 402 && outlineJson.redirectTo) {
             window.location.href = outlineJson.redirectTo;
@@ -724,16 +876,19 @@ export default function ReferenceOutlinePanel({
         }
       }
 
-      const response = await fetch(`/api/projects/${projectId}/full-draft`, {
+      const draftUrl = `/api/projects/${projectId}/full-draft`;
+      console.log("[full-draft-ui] full_draft_request", { url: draftUrl, method: "POST" });
+      const response = await fetch(draftUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: composedPrompt }),
+        body: JSON.stringify(draftBody),
       });
 
       let queued: FullDraftJobPoll & { async?: boolean; sectionsCreated?: number };
       try {
         queued = (await response.json()) as typeof queued;
       } catch {
+        console.error("[full-draft-ui] full_draft_response_parse_failed", { status: response.status });
         setError(
           response.status >= 500
             ? "Full draft server error (response was not JSON). The job may still be running—refresh the page and check Document sections in a few minutes."
@@ -741,6 +896,13 @@ export default function ReferenceOutlinePanel({
         );
         return;
       }
+
+      console.log("[full-draft-ui] full_draft_response", {
+        ok: response.ok,
+        status: response.status,
+        jobId: queued.jobId ?? null,
+        async: queued.async,
+      });
 
       if (response.status === 402 && (queued as { redirectTo?: string }).redirectTo) {
         window.location.href = (queued as { redirectTo: string }).redirectTo;
@@ -751,16 +913,15 @@ export default function ReferenceOutlinePanel({
         const failedStep = (queued as { failedStep?: string }).failedStep;
         const details = (queued as { details?: string }).details;
         const skipped = (queued as { skippedSources?: { filename: string; reason: string }[] }).skippedSources;
+        const parsedFailure = parseGenerationFailure(details);
         const lines = [
           failedStep ? `Generation failed at: ${failedStep}` : null,
           queued.message || queued.error || `Request failed (HTTP ${response.status}).`,
-          details || null,
+          parsedFailure || details || null,
         ].filter(Boolean) as string[];
         setError(lines.join("\n\n"));
         if (skipped?.length) {
-          setMessage(
-            `Skipped sources (${skipped.length}): ${skipped.map((s) => `${s.filename} (${s.reason})`).join("; ")}`,
-          );
+          setMessage(summarizeSkippedSources(skipped));
         }
         return;
       }
@@ -782,16 +943,24 @@ export default function ReferenceOutlinePanel({
       const deadline = Date.now() + 70 * 60 * 1000;
 
       while (Date.now() < deadline) {
-        const st = await fetch(`/api/projects/${projectId}/full-draft?jobId=${encodeURIComponent(jobId)}`, {
+        const pollUrl = `/api/projects/${projectId}/full-draft?jobId=${encodeURIComponent(jobId)}`;
+        const st = await fetch(pollUrl, {
           cache: "no-store",
         });
         let j: FullDraftJobPoll;
         try {
           j = (await st.json()) as FullDraftJobPoll;
         } catch {
+          console.error("[full-draft-ui] poll_parse_failed", { status: st.status });
           setError("Could not read job status from the server.");
           return;
         }
+        console.log("[full-draft-ui] poll", {
+          ok: st.ok,
+          status: st.status,
+          jobStatus: j.status,
+          progress: j.progress,
+        });
         if (!st.ok) {
           if (st.status === 402 && (j as { redirectTo?: string }).redirectTo) {
             window.location.href = (j as { redirectTo: string }).redirectTo;
@@ -802,7 +971,7 @@ export default function ReferenceOutlinePanel({
         }
 
         setDraftProgress(typeof j.progress === "number" ? j.progress : 0);
-        setDraftJobStep((j.lastStep || j.status || "").replace(/_/g, " "));
+        setDraftJobStep(prettifyDraftStep(j.lastStep || j.status, j.message));
 
         if (j.status === "completed" || j.status === "partial_success" || j.status === "success_with_warnings") {
           let generationBanner = "";
@@ -833,16 +1002,15 @@ export default function ReferenceOutlinePanel({
         }
 
         if (j.status === "failed") {
+          const parsedFailure = parseGenerationFailure(j.details);
           const lines = [
             j.failedStep ? `Generation failed at: ${j.failedStep.replace(/_/g, " ")}` : "Generation failed.",
             j.message || null,
-            j.details || null,
+            parsedFailure || j.details || null,
           ].filter(Boolean) as string[];
           setError(lines.join("\n\n"));
           if (j.skippedSources?.length) {
-            setMessage(
-              `Skipped sources (${j.skippedSources.length}): ${j.skippedSources.map((s) => `${s.filename} (${s.reason})`).join("; ")}`,
-            );
+            setMessage(summarizeSkippedSources(j.skippedSources));
           }
           return;
         }
@@ -852,6 +1020,7 @@ export default function ReferenceOutlinePanel({
 
       setError("Timed out waiting for the full draft job (over 70 minutes). Check Document sections—the server may still finish in the background.");
     } catch (e) {
+      console.error("[full-draft-ui] generate_error", e);
       setError(e instanceof Error ? e.message : "Full draft generation failed (network or unexpected error).");
     } finally {
       setBusy(null);
@@ -869,8 +1038,8 @@ export default function ReferenceOutlinePanel({
           <SliderRow
             label="Number of Pages ± 5"
             valueLabel={`${pages}`}
-            min={20}
-            max={80}
+            min={10}
+            max={120}
             step={5}
             value={pages}
             onChange={setPages}
@@ -906,7 +1075,7 @@ export default function ReferenceOutlinePanel({
           <SliderRow
             label="Citation Coverage"
             valueLabel={`${citationCoverage}%`}
-            min={0}
+            min={5}
             max={100}
             step={5}
             value={citationCoverage}
@@ -1238,8 +1407,11 @@ export default function ReferenceOutlinePanel({
               ) : null}
             </div>
 
-            <div className="space-y-2 border-t border-blue-200/40 pt-4 dark:border-white/10">
-              <div className="flex items-end gap-2 rounded-2xl border border-slate-200/80 bg-white p-2 shadow-sm dark:border-white/10 dark:bg-slate-950/25 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] dark:backdrop-blur-xl">
+            <div
+              ref={fullDraftFeedbackRef}
+              className="relative z-20 isolate space-y-2 border-t border-blue-200/40 pt-4 dark:border-white/10"
+            >
+              <div className="relative z-20 flex items-end gap-2 rounded-2xl border border-slate-200/80 bg-white p-2 shadow-sm dark:border-white/10 dark:bg-slate-950/25 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] dark:backdrop-blur-xl">
                 <textarea
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
@@ -1254,10 +1426,15 @@ export default function ReferenceOutlinePanel({
                 />
                 <button
                   type="button"
-                  onClick={generateFullDraft}
-                  disabled={busy !== null || !canGenerate}
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#176BFF] text-white shadow-md shadow-blue-900/20 transition hover:brightness-110 disabled:opacity-45"
-                  title="Generate full draft"
+                  onClick={handleGenerateFullDraftClick}
+                  disabled={busy !== null}
+                  title={
+                    canGenerate
+                      ? "Generate full draft"
+                      : "Need 1+ uploaded source, or 8+ words in the box, or a 5+ character title with 1+ source, or 3+ sources."
+                  }
+                  aria-label="Generate full draft"
+                  className="relative z-30 inline-flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-full bg-[#176BFF] text-white shadow-md shadow-blue-900/20 transition hover:brightness-110 disabled:opacity-45"
                 >
                   <span className="sr-only">Generate full draft</span>
                   <span aria-hidden className="text-base font-bold leading-none">
@@ -1271,6 +1448,13 @@ export default function ReferenceOutlinePanel({
               <p className="px-1 text-xs font-medium text-slate-500 dark:text-slate-400">
                 Sources available: {effectiveReferenceCount}
               </p>
+              {!canGenerate && busy === null ? (
+                <p className="px-1 text-xs font-medium text-amber-800/90 dark:text-amber-200/85">
+                  With at least one uploaded source, Generate works even if this box is empty (the app attaches your
+                  thesis settings to the request). Otherwise use 8+ words, or a 5+ character title with 1+ source, or 3+
+                  sources.
+                </p>
+              ) : null}
 
               {busy === "draft" ? (
                 <div className="space-y-2">

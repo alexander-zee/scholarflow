@@ -16,6 +16,8 @@ export function buildOutlinePrompt(args: {
   integrityNotice: string;
   targetPages?: number;
   targetWordBudget?: number;
+  /** Extra constraints from workspace UI (pages, citation mode, language, etc.). */
+  workspacePolicy?: string;
 }) {
   return `
 You are ThesisPilot, an AI writing coach for thesis and academic work.
@@ -78,6 +80,7 @@ Return JSON with EXACT keys:
 Set integrity_notice to exactly:
 ${args.integrityNotice}
 
+${args.workspacePolicy?.trim() ? `${args.workspacePolicy.trim()}\n` : ""}
 Structural requirements:
 - Build a realistic thesis hierarchy, not a flat chapter list.
 - Each suggested chapter must include multiple "sections" entries.

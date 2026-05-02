@@ -2,6 +2,10 @@ import { escapeLatex } from "@/lib/latex-escape";
 import { sanitizeThesisLatexMath } from "@/lib/latex-math-sanitize";
 import { sanitizeBlankCitationsInLatex } from "@/lib/thesis-citation-sanitize";
 
+function sanitizeHeadingSlash(title: string): string {
+  return title.replace(/\s*\/\s*/g, " and ").trim();
+}
+
 /** True when content is already model-generated LaTeX (must not run through escapeLatex). */
 export function looksLikeLatexBody(s: string): boolean {
   const t = s.trim();
@@ -129,8 +133,9 @@ export function buildThesisLatexDocument(
   meta: ThesisLatexMeta,
   sections: { title: string; content: string }[],
   target: ThesisTexTarget = "pdflatex",
-  options?: { forcePlainBodies?: boolean; abstractLatex?: string | null },
+  options?: { forcePlainBodies?: boolean; abstractLatex?: string | null; natbibPackageOptions?: string },
 ): string {
+  const natbibOpts = options?.natbibPackageOptions?.trim() || "numbers,sort&compress";
   const generatedAbstract = options?.abstractLatex?.trim()
     ? stripAbstractEnvironment(options.abstractLatex)
     : "";
@@ -150,11 +155,11 @@ export function buildThesisLatexDocument(
           .map((p) => escapeLatex(p))
           .join("\n\n")
       : sectionContentToLatexBody(sanitizeThesisLatexMath(generatedAbstract))
-    : absFallback || "\\textit{[Expand abstract --- replace this placeholder.]}";
+    : absFallback || "\\textit{Abstract pending final expansion in this draft build.}";
 
   const chapterBlocks = sections
     .map((section) => {
-      const chTitle = escapeLatex(section.title.trim() || "Chapter");
+      const chTitle = escapeLatex(sanitizeHeadingSlash(section.title.trim() || "Chapter"));
       const rawBody = sanitizeThesisLatexMath(section.content);
       const body = options?.forcePlainBodies
         ? plainifyLatexLikeText(rawBody)
@@ -198,7 +203,7 @@ export function buildThesisLatexDocument(
 \\usepackage{booktabs}
 \\usepackage{graphicx}
 \\usepackage{float}
-\\usepackage[numbers,sort&compress]{natbib}
+\\usepackage[${natbibOpts}]{natbib}
 \\usepackage{fancyhdr}
 ${tikzBundle}
 \\usepackage[hidelinks]{hyperref}`;
@@ -212,7 +217,7 @@ ${tikzBundle}
 \\usepackage{booktabs}
 \\usepackage{graphicx}
 \\usepackage{float}
-\\usepackage[numbers,sort&compress]{natbib}
+\\usepackage[${natbibOpts}]{natbib}
 \\usepackage{fancyhdr}
 ${tikzBundle}
 \\usepackage[hidelinks]{hyperref}`;
@@ -226,6 +231,7 @@ ${preamble}
   pdftitle={${escapeLatex(meta.title)}},
   pdfauthor={${escapeLatex(meta.authorName)}},
   colorlinks=true,
+  linktoc=all,
   linkcolor=blue,
   citecolor=blue,
   urlcolor=blue,
@@ -267,8 +273,9 @@ ${abstractForDoc}
 \\chapter*{Declaration}
 This document was produced by \\textbf{${escapeLatex(meta.authorName)}} with ThesisPilot as \\emph{draft scaffolding}. The author is responsible for all claims, citations, data, and compliance with institutional academic integrity rules.
 
+\\phantomsection
 \\tableofcontents
-\\cleardoublepage
+\\clearpage
 \\pagenumbering{arabic}
 \\setcounter{page}{1}
 
@@ -292,7 +299,7 @@ ${bibliographyBlock}
 export function buildSimpleArticleLatexDocument(title: string, sections: { title: string; content: string }[]): string {
   const body = sections
     .map((section) => {
-      const sectionTitle = escapeLatex(section.title);
+      const sectionTitle = escapeLatex(sanitizeHeadingSlash(section.title));
       const inner = sectionContentToLatexBody(section.content);
       return `\\section{${sectionTitle}}\n${inner}\n`;
     })

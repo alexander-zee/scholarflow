@@ -70,7 +70,7 @@ export default async function ProjectDetailPage({
               <span>Terms &amp; Policies</span>
             </div>
             <div className="flex items-center justify-between text-[11px] text-slate-400">
-              <p className="text-base font-semibold tracking-[0.22em] text-slate-200">SCHOLARFLOW</p>
+              <p className="text-base font-semibold tracking-[0.22em] text-slate-200">THESISPILOT</p>
               <p>Research drafting powered by AI supervision</p>
             </div>
           </div>

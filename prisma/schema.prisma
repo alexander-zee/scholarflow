@@ -73,6 +73,8 @@ model Project {
   language        String
   researchQuestion String
   description     String?
+  /** Latest workspace generation controls from the thesis UI (pages, citation mode, language, etc.). */
+  workspaceGenerationSettings Json?
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 

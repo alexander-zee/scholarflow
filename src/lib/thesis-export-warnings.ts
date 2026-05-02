@@ -107,21 +107,49 @@ export function mergeAndDedupeWarnings(...groups: ScholarFlowExportWarning[][]):
   return out;
 }
 
+const MAX_WARNINGS_IN_HEADER = 14;
+const MAX_WARNING_MESSAGE_CHARS = 200;
+const MAX_HEADER_JSON_BYTES = 6500;
+
 export function encodeExportWarningsPayload(warnings: ScholarFlowExportWarning[]): string {
-  const payload = {
+  const slim = warnings.slice(0, MAX_WARNINGS_IN_HEADER).map((w) => ({
+    code: w.code.length > 96 ? `${w.code.slice(0, 96)}…` : w.code,
+    message:
+      w.message.length > MAX_WARNING_MESSAGE_CHARS
+        ? `${w.message.slice(0, MAX_WARNING_MESSAGE_CHARS)}…`
+        : w.message,
+  }));
+  let payload = {
     v: 1 as const,
     title: EXPORT_WARNING_PANEL_TITLE,
     intro: EXPORT_WARNING_PANEL_INTRO,
-    warnings: warnings.slice(0, 40),
+    warnings: slim,
   };
-  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+  let json = JSON.stringify(payload);
+  while (Buffer.byteLength(json, "utf8") > MAX_HEADER_JSON_BYTES && payload.warnings.length > 4) {
+    payload = {
+      ...payload,
+      warnings: payload.warnings.slice(0, Math.max(4, Math.floor(payload.warnings.length / 2))),
+    };
+    json = JSON.stringify(payload);
+  }
+  return Buffer.from(json, "utf8").toString("base64");
 }
 
 export function attachExportWarningHeaders(res: NextResponse, warnings: ScholarFlowExportWarning[]): NextResponse {
   const status: ScholarFlowExportStatus = warnings.length > 0 ? "success_with_warnings" : "success";
   res.headers.set("X-ScholarFlow-Export-Status", status);
   if (warnings.length > 0) {
-    res.headers.set("X-ScholarFlow-Export-Warnings-B64", encodeExportWarningsPayload(warnings));
+    try {
+      const b64 = encodeExportWarningsPayload(warnings);
+      if (b64.length > 12_000) {
+        console.warn("[export-warnings] payload still large after trim; omitting B64 header", { b64Length: b64.length });
+      } else {
+        res.headers.set("X-ScholarFlow-Export-Warnings-B64", b64);
+      }
+    } catch (e) {
+      console.warn("[export-warnings] failed to attach warning header", e);
+    }
   }
   return res;
 }

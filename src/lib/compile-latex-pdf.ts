@@ -60,32 +60,48 @@ export function getPdfCompileReadiness() {
     tectonicAvailable: Boolean(tectonicPath),
     pdflatexConfigured: Boolean(pdflatexEngine),
     requireLatexPdf: /^1|true|yes$/i.test(process.env.SCHOLARFLOW_REQUIRE_LATEX_PDF?.trim() || ""),
+    plainFallbackDisabled: /^1|true|yes$/i.test(process.env.SCHOLARFLOW_DISABLE_PDF_PLAIN_FALLBACK?.trim() || ""),
   };
 }
 
-async function compileWithTectonic(tex: string, tectonicExe: string): Promise<Buffer | null> {
+function extractStderrTail(err: unknown, max = 4000): string | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const o = err as { stderr?: Buffer | string };
+  if (o.stderr === undefined || o.stderr === null) return undefined;
+  const s = Buffer.isBuffer(o.stderr) ? o.stderr.toString("utf8") : String(o.stderr);
+  const t = s.trim();
+  if (!t) return undefined;
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+async function compileWithTectonic(tex: string, tectonicExe: string): Promise<{ pdf: Buffer | null; stderrTail?: string }> {
+  const runs = Math.min(4, Math.max(1, Number.parseInt(process.env.SCHOLARFLOW_TECTONIC_RUNS || "2", 10) || 2));
   const tmp = await mkdtemp(join(tmpdir(), "sf-tec-"));
   const texPath = join(tmp, "main.tex");
   const pdfPath = join(tmp, "main.pdf");
   try {
     await writeFile(texPath, tex, "utf8");
-    await execFileAsync(tectonicExe, [texPath, `--outdir=${tmp}`], {
-      cwd: tmp,
-      timeout: 180_000,
-      windowsHide: true,
-      maxBuffer: 30 * 1024 * 1024,
-    });
-    if (!existsSync(pdfPath)) return null;
-    return await readFile(pdfPath);
+    for (let i = 0; i < runs; i++) {
+      await execFileAsync(tectonicExe, [texPath, `--outdir=${tmp}`], {
+        cwd: tmp,
+        timeout: 180_000,
+        windowsHide: true,
+        maxBuffer: 30 * 1024 * 1024,
+      });
+    }
+    if (!existsSync(pdfPath)) return { pdf: null, stderrTail: "Tectonic finished but main.pdf missing." };
+    const buf = await readFile(pdfPath);
+    return { pdf: buf.length ? buf : null, stderrTail: buf.length ? undefined : "Empty PDF buffer." };
   } catch (err) {
-    console.warn("[ThesisPilot] Tectonic compile failed.", err);
-    return null;
+    const stderrTail = extractStderrTail(err);
+    console.warn("[ThesisPilot] Tectonic compile failed.", stderrTail ?? err);
+    return { pdf: null, stderrTail };
   } finally {
     await rm(tmp, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-async function compileWithPdflatex(tex: string, engine: string): Promise<Buffer | null> {
+async function compileWithPdflatex(tex: string, engine: string): Promise<{ pdf: Buffer | null; stderrTail?: string }> {
   const runs = Math.min(4, Math.max(1, Number.parseInt(process.env.SCHOLARFLOW_LATEX_RUNS || "2", 10) || 2));
   const tmp = await mkdtemp(join(tmpdir(), "sf-pdf-"));
   const base = "scholarflow-export";
@@ -102,38 +118,82 @@ async function compileWithPdflatex(tex: string, engine: string): Promise<Buffer 
         maxBuffer: 30 * 1024 * 1024,
       });
     }
-    return await readFile(join(tmp, pdfFile));
+    const buf = await readFile(join(tmp, pdfFile));
+    return { pdf: buf.length ? buf : null, stderrTail: buf.length ? undefined : "pdflatex produced empty PDF." };
   } catch (err) {
-    console.warn("[ThesisPilot] pdflatex compile failed.", err);
-    return null;
+    const stderrTail = extractStderrTail(err);
+    console.warn("[ThesisPilot] pdflatex compile failed.", stderrTail ?? err);
+    return { pdf: null, stderrTail };
   } finally {
     await rm(tmp, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
+export type ThesisLatexCompileStage = "primary" | "repair";
+
+export type ThesisLatexCompileAttempt = {
+  engine: "tectonic" | "pdflatex";
+  stage: ThesisLatexCompileStage;
+  ok: boolean;
+  stderrTail?: string;
+};
+
+export type ThesisLatexCompileOutcome = {
+  pdf: Buffer | null;
+  engine: "tectonic" | "pdflatex" | null;
+  attempts: ThesisLatexCompileAttempt[];
+};
+
 /**
- * Produce a PDF from thesis LaTeX: Tectonic (bundled XeTeX) first, then optional pdflatex.
- * All work happens under os.tmpdir() (serverless-friendly).
+ * Produce a PDF from thesis LaTeX: Tectonic first, then pdflatex; optional repaired `.tex` retry for each.
  */
 export async function compileThesisLatexToPdf(args: {
   texForTectonic: string;
   texForPdflatex: string;
-}): Promise<Buffer | null> {
+  /** Optional one-shot repaired sources (same shape as primary strings). */
+  texForTectonicRepair?: string;
+  texForPdflatexRepair?: string;
+}): Promise<ThesisLatexCompileOutcome> {
+  const attempts: ThesisLatexCompileAttempt[] = [];
   const disableTectonic = /^1|true|yes$/i.test(process.env.SCHOLARFLOW_DISABLE_TECTONIC?.trim() || "");
-
-  if (!disableTectonic) {
-    const tectonicExe = resolveBundledTectonicPath();
-    if (tectonicExe) {
-      const pdf = await compileWithTectonic(args.texForTectonic, tectonicExe);
-      if (pdf?.length) return pdf;
-    }
-  }
-
+  const tectonicExe = disableTectonic ? null : resolveBundledTectonicPath();
   const pdflatex = resolvePdflatexEngine();
-  if (pdflatex) {
-    const pdf = await compileWithPdflatex(args.texForPdflatex, pdflatex);
-    if (pdf?.length) return pdf;
+
+  const runTec = async (tex: string, stage: ThesisLatexCompileStage) => {
+    if (!tectonicExe) {
+      attempts.push({ engine: "tectonic", stage, ok: false, stderrTail: "Tectonic disabled or binary missing." });
+      return null;
+    }
+    const { pdf, stderrTail } = await compileWithTectonic(tex, tectonicExe);
+    attempts.push({ engine: "tectonic", stage, ok: Boolean(pdf?.length), stderrTail });
+    return pdf?.length ? pdf : null;
+  };
+
+  const runPdf = async (tex: string, stage: ThesisLatexCompileStage) => {
+    if (!pdflatex) {
+      attempts.push({ engine: "pdflatex", stage, ok: false, stderrTail: "pdflatex not configured (e.g. Vercel or SCHOLARFLOW_LATEX_ENGINE=off)." });
+      return null;
+    }
+    const { pdf, stderrTail } = await compileWithPdflatex(tex, pdflatex);
+    attempts.push({ engine: "pdflatex", stage, ok: Boolean(pdf?.length), stderrTail });
+    return pdf?.length ? pdf : null;
+  };
+
+  let p = await runTec(args.texForTectonic, "primary");
+  if (p) return { pdf: p, engine: "tectonic", attempts };
+
+  p = await runPdf(args.texForPdflatex, "primary");
+  if (p) return { pdf: p, engine: "pdflatex", attempts };
+
+  if (args.texForTectonicRepair && args.texForTectonicRepair !== args.texForTectonic) {
+    p = await runTec(args.texForTectonicRepair, "repair");
+    if (p) return { pdf: p, engine: "tectonic", attempts };
   }
 
-  return null;
+  if (args.texForPdflatexRepair && args.texForPdflatexRepair !== args.texForPdflatex) {
+    p = await runPdf(args.texForPdflatexRepair, "repair");
+    if (p) return { pdf: p, engine: "pdflatex", attempts };
+  }
+
+  return { pdf: null, engine: null, attempts };
 }

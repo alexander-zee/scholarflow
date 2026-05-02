@@ -1,7 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
+
+const fieldClass =
+  "w-full rounded-full border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-500";
 
 export default function SignUpPage() {
   const router = useRouter();
@@ -17,21 +21,32 @@ export default function SignUpPage() {
     setError("");
     setResendMessage("");
     setLoading(true);
-    const payload = {
-      name: String(formData.get("name") || ""),
-      email: String(formData.get("email") || ""),
-      password: String(formData.get("password") || ""),
-    };
-    setLastEmail(payload.email);
+    const name = String(formData.get("name") || "");
+    const email = String(formData.get("email") || "");
+    const password = String(formData.get("password") || "");
+    const confirm = String(formData.get("confirmPassword") || "");
+
+    if (password !== confirm) {
+      setError("Passwords do not match.");
+      setLoading(false);
+      return;
+    }
+
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters.");
+      setLoading(false);
+      return;
+    }
+
+    setLastEmail(email);
     const response = await fetch("/api/auth/signup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ name, email, password }),
     });
     const json = await response.json();
     if (!response.ok) {
       setError(json.error || "Signup failed.");
-      // Keep resend available when account already exists but is unverified.
       if (String(json.error || "").toLowerCase().includes("already exists")) {
         setResendMessage("If this account is not verified yet, you can resend verification email.");
       }
@@ -67,39 +82,115 @@ export default function SignUpPage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-md rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
-      <h1 className="text-2xl font-bold text-slate-900">Create account</h1>
-      <p className="mt-1 text-sm text-slate-600">Start improving your thesis with ethical AI feedback.</p>
-      <form action={onSubmit} className="mt-5 space-y-3">
-        <input name="name" required placeholder="Full name" className="w-full rounded-md border border-slate-300 px-3 py-2" />
-        <input name="email" required type="email" placeholder="Email" className="w-full rounded-md border border-slate-300 px-3 py-2" />
-        <input name="password" required type="password" placeholder="Password (min. 8 chars)" className="w-full rounded-md border border-slate-300 px-3 py-2" />
-        <button disabled={loading} className="w-full rounded-md bg-blue-600 px-4 py-2 font-medium text-white disabled:opacity-60">
-          {loading ? "Creating..." : "Create account"}
-        </button>
-        {error ? <p className="text-sm text-red-600">{error}</p> : null}
-        {message ? <p className="text-sm text-emerald-700">{message}</p> : null}
-        {(message || error) && lastEmail ? (
+    <main className="w-full max-w-[440px]">
+      <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Sign Up</h1>
+      <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+        By signing up for ThesisPilot, you accept the{" "}
+        <Link href="/terms" className="font-medium text-[#1D4ED8] hover:underline dark:text-blue-400">
+          terms
+        </Link>{" "}
+        &amp;{" "}
+        <Link href="/privacy" className="font-medium text-[#1D4ED8] hover:underline dark:text-blue-400">
+          policies
+        </Link>
+        .
+      </p>
+
+      <div className="mt-8 space-y-4">
+        <form action={onSubmit} className="space-y-4">
+          <div>
+            <label htmlFor="signup-name" className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
+              Name
+            </label>
+            <input
+              id="signup-name"
+              name="name"
+              required
+              autoComplete="name"
+              placeholder="Enter your name"
+              className={fieldClass}
+            />
+          </div>
+          <div>
+            <label htmlFor="signup-email" className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
+              Email
+            </label>
+            <input
+              id="signup-email"
+              name="email"
+              required
+              type="email"
+              autoComplete="email"
+              placeholder="Enter your email"
+              className={fieldClass}
+            />
+          </div>
+          <div>
+            <label htmlFor="signup-password" className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
+              Password
+            </label>
+            <input
+              id="signup-password"
+              name="password"
+              required
+              type="password"
+              autoComplete="new-password"
+              placeholder="Enter your password"
+              className={fieldClass}
+            />
+          </div>
+          <div>
+            <label htmlFor="signup-confirm" className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
+              Confirm password
+            </label>
+            <input
+              id="signup-confirm"
+              name="confirmPassword"
+              required
+              type="password"
+              autoComplete="new-password"
+              placeholder="Enter your password"
+              className={fieldClass}
+            />
+          </div>
           <button
-            type="button"
-            onClick={onResend}
-            disabled={resendLoading}
-            className="text-sm font-medium text-blue-700 underline disabled:opacity-60"
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-full bg-[#1D4ED8] py-3.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1e40af] disabled:opacity-60"
           >
-            {resendLoading ? "Resending..." : "Resend verification email"}
+            {loading ? "Creating account…" : "Sign Up"}
           </button>
-        ) : null}
-        {resendMessage ? <p className="text-sm text-emerald-700">{resendMessage}</p> : null}
-        {verificationUrl ? (
-          <button
-            type="button"
-            onClick={() => router.push(verificationUrl)}
-            className="text-sm font-medium text-blue-700 underline"
-          >
-            Open verification link (local dev)
-          </button>
-        ) : null}
-      </form>
+          {error ? <p className="text-center text-sm text-red-600 dark:text-red-400">{error}</p> : null}
+          {message ? <p className="text-center text-sm text-emerald-700 dark:text-emerald-400">{message}</p> : null}
+          {(message || error) && lastEmail ? (
+            <button
+              type="button"
+              onClick={onResend}
+              disabled={resendLoading}
+              className="w-full text-center text-sm font-semibold text-[#1D4ED8] underline decoration-[#1D4ED8]/40 underline-offset-2 disabled:opacity-60 dark:text-blue-400"
+            >
+              {resendLoading ? "Resending…" : "Resend verification email"}
+            </button>
+          ) : null}
+          {resendMessage ? <p className="text-center text-sm text-emerald-700 dark:text-emerald-400">{resendMessage}</p> : null}
+          {verificationUrl ? (
+            <button
+              type="button"
+              onClick={() => router.push(verificationUrl)}
+              className="w-full text-center text-sm font-semibold text-[#1D4ED8] underline decoration-[#1D4ED8]/40 underline-offset-2 dark:text-blue-400"
+            >
+              Open verification link (local dev)
+            </button>
+          ) : null}
+        </form>
+
+        <p className="text-center text-sm text-slate-600 dark:text-slate-400">
+          Already have an account?{" "}
+          <Link href="/auth/signin" className="font-semibold text-[#1D4ED8] hover:underline dark:text-blue-400">
+            Login
+          </Link>
+        </p>
+      </div>
     </main>
   );
 }

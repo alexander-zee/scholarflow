@@ -28,8 +28,22 @@ export function inferThesisChapterKind(chapterTitle: string): ThesisChapterKind 
   if (/(appendix|supplement|supplementary\s+material|online\s+appendix)/i.test(t)) return "appendix";
   if (/(intro|introduction|overview|background\s+and\s+motivation)/i.test(t)) return "introduction";
   if (/(literature|related\s+work|prior\s+work|theoretical\s+background)/i.test(t)) return "literature";
-  if (/(method|methodology|empirical\s+strateg|data\s+and\s+sample|econometric\s+setup|model\s+spec)/i.test(t)) return "methodology";
-  if (/(result|empirical\s+result|finding|estimation\s+result|evidence)/i.test(t)) return "results";
+  /** Results before discussion so titles like "Results and Discussion" classify as results. */
+  if (
+    /(results?\s+and\s+analysis|results?\s+and\s+discussion|empirical\s+results|main\s+results|quantitative\s+results|estimation\s+results|statistical\s+results|baseline\s+estimates|result\s+chapter)/i.test(
+      t,
+    ) ||
+    (/\bresults?\b/i.test(t) && /\b(analysis|findings?|evidence|estimates)\b/i.test(t))
+  ) {
+    return "results";
+  }
+  if (
+    /(method|methodology|research\s+design|identification|econometric\s+setup|empirical\s+strateg|data\s+and\s+methods?|data\s+and\s+sample|model\s+spec|estimation\s+framework|quantitative\s+framework|measurement|sampling\s+design)/i.test(
+      t,
+    )
+  ) {
+    return "methodology";
+  }
   if (/(discuss|conclusion|summary|implication|limitation|future\s+research)/i.test(t)) return "discussion";
   return "general";
 }
@@ -145,11 +159,12 @@ export function buildUploadOnlyCitationRules(uploadedFileNames: string[]): strin
 /** Full document schema the model must respect chapter-by-chapter (Abstract is separate). */
 export const THESIS_DOCUMENT_SCHEMA = [
   "Thesis document schema (BSc/MSc STEM / econometrics style):",
+  "- Use \"and\" in headings instead of slash characters \"/\" inside \\section{...} and \\subsection{...} titles (e.g. prefer \"Results and Analysis\", never \"Results / Analysis\").",
   "- Abstract: separate pass (no \\chapter here).",
   "- Introduction: nested \\section and \\subsection; roadmap; research question; contribution.",
   "- Literature review: thematic \\subsection blocks (theory, evidence, gap).",
   "- Methodology: data, estimators, assumptions, equations (valid LaTeX) where appropriate.",
-  "- Results / analysis: MUST include \\subsection{Descriptive Results}, \\subsection{Model Results}, \\subsection{Robustness Checks} (titles may be lightly adapted but keep these three themes), at least one booktabs table, and at least one figure environment with \\label and in-text references using Figure~\\ref{...} / Table~\\ref{...}.",
+  "- Results and analysis: MUST include \\subsection{Descriptive Results}, \\subsection{Model Results}, \\subsection{Robustness Checks} (titles may be lightly adapted but keep these three themes), at least one booktabs table, and at least one figure environment with \\label and in-text references using Figure~\\ref{...} and Table~\\ref{...}.",
   "- Discussion / conclusion: implications, limitations, future work.",
   "- References list: export builds the bibliography from your \\citep{uploadedN} keys — do not fabricate standalone \\bibitem text in chapter bodies.",
   "- Appendix (when present): supplementary tables/figures/definitions tied to the thesis topic — no generic boilerplate about replacing illustrative numbers.",
@@ -159,6 +174,9 @@ export const THESIS_FILLER_BAN = [
   "Avoid generic filler unless tightly tied to evidence:",
   '- Do not lean on phrases like "This thesis aims to contribute", "complex and multifaceted phenomena", "state-of-the-art", "substantial progress has been made" as substitutes for argument.',
   "- Each paragraph should move claim → method or evidence → interpretation.",
+  "Forbidden scaffold / meta prose (submission drafts must read as finished argument, not instructions):",
+  '- Never write: "This passage develops", "This passage addresses", "This section will", "This subsection is included to preserve", or "replace with …" / bracket stubs like [fill], [coefficient], [sample size].',
+  "- Write concrete claims, definitions, and interpretation; if numbers are illustrative, say so once in plain language and still report plausible magnitudes tied to the literature.",
 ].join("\n");
 
 export const THESIS_RESULTS_TABLE_GUIDE = [

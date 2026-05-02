@@ -1,6 +1,14 @@
 /** Pass 10-style audit: banned substrings that indicate placeholder leakage or broken refs. */
 
 const BANNED_SUBSTRINGS: { pattern: RegExp; code: string; message: string }[] = [
+  { pattern: /this\s+passage\s+develops/i, code: "ban_this_passage_develops", message: 'Remove meta scaffold phrasing ("This passage develops…"). Write substantive argument instead.' },
+  { pattern: /this\s+passage\s+addresses/i, code: "ban_this_passage_addresses", message: 'Remove meta scaffold phrasing ("This passage addresses…"). Write substantive argument instead.' },
+  { pattern: /this\s+section\s+will\b/i, code: "ban_this_section_will", message: 'Remove forward-reference filler ("This section will…"). Write the content now.' },
+  { pattern: /\breplace\s+with\b/i, code: "ban_replace_with", message: "Remove “replace with …” template instructions; supply final wording." },
+  { pattern: /(^|\n)\s*SECTION:\s*/i, code: "ban_section_scaffold_label", message: "Remove or convert SECTION: labels into real \\section{...} headings." },
+  { pattern: /(^|\n)\s*Subsection:\s*/i, code: "ban_subsection_scaffold_label", message: "Remove or convert Subsection: labels into real \\subsection{...} headings." },
+  { pattern: /this\s+subsection\s+is\s+included\s+to\s+preserve/i, code: "ban_structure_preservation_meta", message: "Remove structure-preservation boilerplate; expand with real analysis." },
+  { pattern: /\[fill\]|\[coefficient\]|\[sample size\]/i, code: "ban_bracket_fill_stub", message: "Remove bracket fill stubs; use numbers or honest illustrative labels in prose/captions." },
   { pattern: /awawadwd/i, code: "ban_awawadwd", message: "Forbidden placeholder substring detected." },
   { pattern: /\basddd\b/i, code: "ban_asddd", message: "Forbidden placeholder substring detected." },
   { pattern: /\bPlaceholder\s+Figure\b/i, code: "ban_placeholder_figure", message: 'Use "Illustrative" figures with real TikZ/pgfplots, not "Placeholder Figure".' },

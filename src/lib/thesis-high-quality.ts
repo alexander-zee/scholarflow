@@ -1,7 +1,7 @@
 /**
- * Slow, multi-pass thesis generation for users who prioritize quality over latency.
- * Enable via JSON body `{ "highQualityThesis": true }` or prompt containing `HIGH_QUALITY_THESIS`,
- * or env `SCHOLARFLOW_HIGH_QUALITY_THESIS=1`.
+ * Multi-pass thesis generation (higher token budgets, blueprint pass, deeper repairs).
+ * The full-draft API defaults `highQualityThesis` to true; set `{ "highQualityThesis": false }` to opt out.
+ * Also triggers on prompt token `HIGH_QUALITY_THESIS` or env `SCHOLARFLOW_HIGH_QUALITY_THESIS=1`.
  */
 export const HIGH_QUALITY_THESIS_PROMPT_TOKEN = "HIGH_QUALITY_THESIS";
 

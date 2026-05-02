@@ -10,6 +10,7 @@ import {
   incrementUsage,
 } from "@/lib/usage";
 import { getFallbackModel, getModel } from "@/lib/ai-config";
+import { extractResponsesOutputText } from "@/lib/openai-response-text";
 import {
   parseGraphTableProposal,
   parseSupervisorPayload,
@@ -194,11 +195,11 @@ function enforceEvidenceGrounding(answer: string, draftText: string) {
 }
 
 function getSupervisorModel() {
-  return process.env.OPENAI_SUPERVISOR_MODEL || "gpt-4.1";
+  return process.env.OPENAI_SUPERVISOR_MODEL?.trim() || getModel();
 }
 
 function getSupervisorFallbackModel() {
-  return process.env.OPENAI_SUPERVISOR_FALLBACK_MODEL || getModel() || getFallbackModel();
+  return process.env.OPENAI_SUPERVISOR_FALLBACK_MODEL?.trim() || getFallbackModel();
 }
 
 function buildJsonSupervisorPrompt(args: {
@@ -586,7 +587,7 @@ async function callSupervisorModel(model: string, input: string, maxTokens: numb
     input,
     max_output_tokens: maxTokens,
   });
-  return (response.output_text || "").trim();
+  return extractResponsesOutputText(response).text.trim();
 }
 
 export async function POST(request: Request) {

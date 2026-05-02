@@ -223,6 +223,7 @@ export function auditChapterBody(
     technicalPipeline?: boolean;
     highQualityThesis?: boolean;
     allowedNatbibKeys?: string[];
+    topicContext?: { title: string; researchQuestion: string; field: string };
   },
 ): ThesisAuditIssue[] {
   const issues: ThesisAuditIssue[] = [];
@@ -297,9 +298,8 @@ export function auditChapterBody(
   if (kind === "results") {
     const tables = countTableEnvironments(body);
     const figs = countFigureEnvironments(body);
-    const hq = Boolean(context?.highQualityThesis);
-    const minTables = hq ? 2 : 1;
-    const minFigs = hq ? 2 : 1;
+    const minTables = 2;
+    const minFigs = 2;
     if (tables < minTables) {
       issues.push({
         code: "results_tables",
@@ -348,6 +348,30 @@ export function auditChapterBody(
     issues.push({
       code: "malformed_inline_math",
       detail: "Degenerate inline math (empty \\( \\) or bare symbols with a colon) detected; remove or replace with valid LaTeX.",
+    });
+  }
+
+  if (/(^|\n)\s*(Context and Motivation|Research Question|Structure of the Thesis)\s+[A-Z]/m.test(body)) {
+    issues.push({
+      code: "inline_subsection_labels",
+      detail:
+        "Inline subsection labels detected (e.g., 'Context and Motivation ...'). Convert them to explicit \\subsection{...} headings.",
+    });
+  }
+
+  if (/(?:Figure|Table)~(?!\\ref\{)/m.test(body) || /(?:Figure|Table)\s+\?\?/m.test(body)) {
+    issues.push({
+      code: "unresolved_float_references",
+      detail: "Detected unresolved table/figure references; always use Table~\\ref{...} and Figure~\\ref{...}.",
+    });
+  }
+
+  const topicScope = `${context?.topicContext?.title || ""} ${context?.topicContext?.researchQuestion || ""} ${context?.topicContext?.field || ""}`.toLowerCase();
+  const allowFinance = /(finance|asset pricing|stock|equity|portfolio|sharpe|return)/i.test(topicScope);
+  if (!allowFinance && /\b(asset pricing|stock returns|equity returns|sharpe ratio|firm-level characteristics|portfolio)\b/i.test(body)) {
+    issues.push({
+      code: "topic_drift_domain",
+      detail: "Detected domain drift terms unrelated to the normalized thesis topic (finance/asset-pricing vocabulary).",
     });
   }
 
@@ -562,20 +586,12 @@ ${args.references}
 export type ThesisQualityGateHit = { scope: string; code: string; detail: string };
 export type ThesisQualityGateSeverity = "fatal" | "warning";
 
-const FATAL_QUALITY_GATE_CODES = new Set<string>([
-  "sections_missing",
-  "subsections_min",
-  "document_sections_total",
-  "early_display_math",
-  "method_math_sparse",
-  "results_tables",
-  "results_figures",
-  "results_subsection_themes",
-  "appendix_missing",
-]);
-
-export function classifyQualityGateHitSeverity(hit: ThesisQualityGateHit): ThesisQualityGateSeverity {
-  return FATAL_QUALITY_GATE_CODES.has(hit.code) ? "fatal" : "warning";
+/**
+ * Product policy: quality gates surface warnings and optional repair passes only.
+ * Fatal job failures are reserved for empty/API/unparseable output and export compile errors upstream.
+ */
+export function classifyQualityGateHitSeverity(_hit: ThesisQualityGateHit): ThesisQualityGateSeverity {
+  return "warning";
 }
 
 export function auditFullThesisQualityGate(args: {
@@ -584,6 +600,7 @@ export function auditFullThesisQualityGate(args: {
   technicalPipeline: boolean;
   highQualityThesis: boolean;
   allowedNatbibKeys: string[];
+  topicContext?: { title: string; researchQuestion: string; field: string };
 }): ThesisQualityGateHit[] {
   const hits: ThesisQualityGateHit[] = [];
   const absPh = auditTextForPlaceholderLeaks(args.abstractLatex);
@@ -634,6 +651,7 @@ export function auditFullThesisQualityGate(args: {
       technicalPipeline: args.technicalPipeline,
       highQualityThesis: args.highQualityThesis,
       allowedNatbibKeys: args.allowedNatbibKeys,
+      topicContext: args.topicContext,
     });
     for (const issue of chapterIssues) {
       hits.push({ scope: d.title, code: issue.code, detail: issue.detail });

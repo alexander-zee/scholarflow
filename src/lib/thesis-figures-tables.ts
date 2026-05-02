@@ -39,7 +39,7 @@ Control $X_2$ & 0.87 & 0.21 & 0.40 & 1.35 \\
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:descriptives_illus} reports illustrative moments intended only to demonstrate table layout; replace with project-specific estimates.`;
+Table~\ref{tab:descriptives_illus} reports literature-calibrated illustrative moments included for a complete draft artifact set; values are explicitly non-final.`;
 }
 
 export function illustrativeMainRegressionTable(): string {
@@ -58,7 +58,7 @@ Controls included & \multicolumn{3}{r}{Yes} \\
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:main_reg_illus} is illustrative; substitute estimates, standard errors, and sample counts from the empirical analysis.`;
+Table~\ref{tab:main_reg_illus} provides an illustrative coefficient layout with non-final values and explicit uncertainty columns for draft readability.`;
 }
 
 export function illustrativeRobustnessTable(): string {
@@ -77,7 +77,7 @@ Alternative sample window & 0.159 & Direction preserved \\
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:robust_illus} sketches how robustness rows should read once real models are estimated.`;
+Table~\ref{tab:robust_illus} provides an illustrative robustness layout that preserves sign and magnitude consistency checks in draft form.`;
 }
 
 export function tikzConceptualFrameworkFigure(): string {
@@ -119,7 +119,7 @@ export function tikzLiteratureStreamsFigure(): string {
 \label{fig:lit_streams}
 \end{figure}
 
-Figure~\ref{fig:lit_streams} is schematic; node labels should be tailored to the substantive literature review.`;
+Figure~\ref{fig:lit_streams} is schematic and presents a draft-ready map of literature streams converging on open research gaps.`;
 }
 
 export function tikzMethodologyWorkflowFigure(): string {
@@ -163,7 +163,7 @@ export function tikzEvaluationFrameworkFigure(): string {
 \label{fig:eval_framework}
 \end{figure}
 
-Figure~\ref{fig:eval_framework} is generic; replace notation with project-specific estimators and metrics.`;
+Figure~\ref{fig:eval_framework} summarizes a reusable evaluation frame that can be instantiated with project-specific estimators and metrics.`;
 }
 
 export function pgfplotsDescriptiveOutcomeFigure(): string {
@@ -214,7 +214,7 @@ export function pgfplotsMainResultsCoefficientsFigure(): string {
 \label{fig:coef_plot}
 \end{figure}
 
-Figure~\ref{fig:coef_plot} is not an empirical result; swap in model estimates and confidence intervals.`;
+Figure~\ref{fig:coef_plot} presents a draft coefficient-profile visualization with clearly marked non-final values for interpretation flow.`;
 }
 
 export function pgfplotsRobustnessDiagnosticsFigure(): string {

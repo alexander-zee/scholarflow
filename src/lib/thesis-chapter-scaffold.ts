@@ -206,22 +206,6 @@ export function renderScaffoldHeadingsOnlyLatex(scaffold: ChapterScaffold): stri
   return lines.join("\n");
 }
 
-/** Last-resort body so validators always see required headings (placeholder prose). */
-export function renderScaffoldMinimalPlaceholderBody(scaffold: ChapterScaffold): string {
-  const parts: string[] = [];
-  for (const sec of scaffold.sections) {
-    parts.push(`\\section{${escapeLatex(sec.title)}}\n\n`);
-    for (const sub of sec.subsections) {
-      const p1 = `This passage addresses \\emph{${escapeLatex(sub.title)}} in the context of the thesis research question. It synthesises the preceding discussion and states the claims that will be substantiated in the remainder of the chapter.`;
-      const p2 = `The analysis proceeds by clarifying definitions, assumptions, and limitations before connecting implications to the broader literature. Where empirical detail is not yet available, the text states hypotheses and required evidence rather than fabricating estimates.`;
-      parts.push(
-        `\\subsection{${escapeLatex(sub.title)}}\n\n${p1}\n\n${p2}\n\n`,
-      );
-    }
-  }
-  return parts.join("").trim();
-}
-
 export function renderScaffoldSkeletonLatex(scaffold: ChapterScaffold): string {
   const parts: string[] = [];
   for (const sec of scaffold.sections) {
@@ -293,6 +277,54 @@ export function validateChapterStructureAgainstScaffold(body: string, scaffold: 
   return { ok: missing.length === 0, missing };
 }
 
+const MIN_PROSE_CHARS_FOR_HEADING_WRAP = 120;
+
+function stripScaffoldHeadingLinesFromBody(body: string, scaffold: ChapterScaffold): string {
+  let out = body;
+  for (const line of renderScaffoldHeadingsOnlyLatex(scaffold).split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    const escaped = escapeRegExp(t);
+    out = out.replace(new RegExp(`^\\s*${escaped}\\s*$`, "gim"), "");
+  }
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * When the model writes substantive LaTeX prose but omits required \\section/\\subsection lines,
+ * insert the exact scaffold headings and distribute existing paragraphs across subsections in order.
+ * Does not invent filler sentences.
+ */
+export function wrapProseUnderScaffoldHeadings(body: string, scaffold: ChapterScaffold): string | null {
+  const slots = flattenScaffoldSlots(scaffold);
+  if (slots.length === 0) return null;
+  const prose = stripScaffoldHeadingLinesFromBody(body, scaffold).trim();
+  if (prose.length < MIN_PROSE_CHARS_FOR_HEADING_WRAP) return null;
+
+  const blocks = prose
+    .split(/\n\n+/)
+    .map((b) => b.trim())
+    .filter(Boolean);
+  if (blocks.length === 0) return null;
+
+  const perSlot: string[][] = slots.map(() => []);
+  blocks.forEach((b, i) => {
+    perSlot[i % slots.length]!.push(b);
+  });
+
+  const parts: string[] = [];
+  let slotIdx = 0;
+  for (const sec of scaffold.sections) {
+    parts.push(`\\section{${escapeLatex(sec.title)}}`, "");
+    for (const sub of sec.subsections) {
+      const chunk = perSlot[slotIdx]?.join("\n\n") ?? "";
+      slotIdx += 1;
+      parts.push(`\\subsection{${escapeLatex(sub.title)}}`, "", chunk, "");
+    }
+  }
+  return parts.join("\n").trim();
+}
+
 export function buildStrictStructureRepairPrompt(args: {
   missing: string[];
   referenceScaffold: string;
@@ -314,7 +346,8 @@ ${args.citationRulesBlock}
 Rules:
 - Return the FULL chapter LaTeX body only (no preamble; no \\chapter).
 - DO NOT omit any \\section or \\subsection from the reference scaffold.
-- If content is missing for a subsection, write substantive placeholder prose (still >= 2 paragraphs per subsection) rather than deleting headings.
+- If content is missing for a subsection, write substantive academic prose (>= 2 paragraphs per subsection) grounded in the broken draft and citation rules — never delete or rename headings.
+- Forbidden: meta lines like "This passage develops", "This section will", "replace with", bracket stubs [fill], or any sentence that only describes structure instead of doing analysis.
 
 Broken draft to salvage and realign:
 ${args.brokenBody}

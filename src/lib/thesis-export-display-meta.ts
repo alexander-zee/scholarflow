@@ -5,6 +5,11 @@ import {
 } from "@/lib/thesis-input-validation";
 
 const FIELD_NONSENSE = /^(x+|test|aaa|asdf|foo|bar|todo|tbd|none\.?|n\/a\.?)$/i;
+const UI_LEAK_RE = /\b(pages?\s*\(ui setting\)|citation style\s*\(ui setting\)|ui setting)\b/gi;
+
+function stripUiLeakage(input: string): string {
+  return input.replace(UI_LEAK_RE, " ").replace(/\s+/g, " ").trim();
+}
 
 function isGenericOutlineTitle(t: string) {
   return /^(introduction|literature review|literature|background|overview|preface)$/i.test(t.trim());
@@ -53,21 +58,21 @@ export function resolveThesisDisplayMetaForExport(args: {
   degreeLevel: string;
   researchQuestion: string;
 } {
-  const rawTitle = args.projectTitle.trim();
+  const rawTitle = stripUiLeakage(args.projectTitle.trim());
   const title =
     rawTitle && !isUntrustedProjectTitle(rawTitle)
       ? rawTitle.slice(0, 120)
       : pickThesisTitleFromChapterTitles(args.chapterTitles) || "Academic thesis draft";
 
-  const rawField = args.projectField.trim();
+  const rawField = stripUiLeakage(args.projectField.trim());
   const field = rawField && !isUntrustedProjectField(rawField) ? rawField.slice(0, 120) : "Academic research";
 
-  const rawDeg = args.degreeLevel.trim();
+  const rawDeg = stripUiLeakage(args.degreeLevel.trim());
   const degreeLevel =
     rawDeg && !isUntrustedDegreeLevel(rawDeg) ? rawDeg.slice(0, 120) : "Graduate thesis";
 
-  const rawRq = args.researchQuestion.trim();
-  const desc = args.description?.trim() || "";
+  const rawRq = stripUiLeakage(args.researchQuestion.trim());
+  const desc = stripUiLeakage(args.description?.trim() || "");
   const researchQuestion =
     rawRq && !isUntrustedResearchQuestion(rawRq)
       ? rawRq.slice(0, 800)

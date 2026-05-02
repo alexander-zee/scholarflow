@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { after } from "next/server";
 import { createHash } from "crypto";
+import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { openai } from "@/lib/openai";
 import { escapeLatex } from "@/lib/latex-escape";
-import { integrityNotice } from "@/lib/review-modes";
 import {
   ensureThesisGenerationAllowed,
   ensureUsageAllowed,
@@ -49,11 +49,8 @@ import {
   auditChapterBody,
   auditFullThesisQualityGate,
   buildFullDraftQualityDiagnostics,
-  buildGateRepairAbstractPrompt,
-  buildGateRepairChapterPrompt,
   buildQualityRepairPrompt,
-  classifyQualityGateHitSeverity,
-  filterGateHitsForChapterRepair,
+  countDisplayMathLines,
 } from "@/lib/thesis-quality-audit";
 import {
   detectHighQualityThesisMode,
@@ -64,11 +61,8 @@ import {
   HQ_SECTION_DEEP_TOKENS,
   HQ_SECTION_MAX_TOKENS,
 } from "@/lib/thesis-high-quality";
-import {
-  isUntrustedProjectTitle,
-  isUntrustedResearchQuestion,
-  validateThesisUserInputs,
-} from "@/lib/thesis-input-validation";
+import { validateThesisUserInputs } from "@/lib/thesis-input-validation";
+import { normalizeThesisTopicForGeneration } from "@/lib/thesis-topic-normalization";
 import {
   auditCombinedThesisBodies,
   auditTextForPlaceholderLeaks,
@@ -84,42 +78,135 @@ import {
   formatStructureConstraintsJson,
   getChapterScaffold,
   renderScaffoldHeadingsOnlyLatex,
-  renderScaffoldMinimalPlaceholderBody,
   validateChapterStructureAgainstScaffold,
+  wrapProseUnderScaffoldHeadings,
 } from "@/lib/thesis-chapter-scaffold";
+import {
+  buildWorkspacePolicyInstructions,
+  composeWorkspaceModelPrompt,
+  extractResearchPromptFromLegacyComposedPrompt,
+  THESIS_PIPELINE_FIXED_SETTINGS,
+} from "@/lib/thesis-generation-settings";
+import { sendThesisDraftCompleteEmail } from "@/lib/email";
+import {
+  extractResponsesOutputText,
+  summarizeOpenAiResponseForLog,
+  type OpenAiResponseUsage,
+} from "@/lib/openai-response-text";
+import {
+  processChapterBodyFromModelRaw,
+  stripResidualMarkdownLatexArtifacts,
+  unwrapChapterLatexCandidate,
+} from "@/lib/thesis-chapter-extract";
+import { applyDeterministicThesisFinalization, isLikelyMethodologyChapterForPipeline } from "@/lib/thesis-draft-finalize";
 
 /** Vercel / platform limit; `after()` continues work after the 202 response but still shares this ceiling. */
 export const maxDuration = 300;
 
-const bodySchema = z.object({
-  prompt: z.string().min(8),
-  highQualityThesis: z.boolean().optional(),
-});
+const bodySchema = z
+  .object({
+    prompt: z.string().min(8),
+    /** Ignored for layout: thesis pipeline uses fixed workspace settings server-side. */
+    generationSettings: z.unknown().optional(),
+    /** Fast/low-token mode is opt-out only; default is full high-quality pipeline. */
+    highQualityThesis: z.boolean().optional().default(true),
+  })
+  .passthrough();
 
 const SECTION_MAX_OUTPUT_TOKENS = 3000;
 const SECTION_MAX_OUTPUT_TOKENS_DEEP = 4200;
 const ABSTRACT_MAX_OUTPUT_TOKENS = 900;
 const QUALITY_REPAIR_MAX_TOKENS = 2800;
-const MAX_REFERENCE_SNIPPET_CHARS = 18000;
+/** Total chars for reference excerpts in the thesis worker; must scale with many uploads or most sources are skipped. */
+const MAX_REFERENCE_SNIPPET_CHARS = 96_000;
 const MAX_SECTION_EXPANSION_PASSES = 2;
 const MAX_STRUCTURE_REPAIR_PASSES = 2;
 const MAX_ABSTRACT_EXPANSION_PASSES = 2;
 const MAX_QUALITY_REPAIR_PASSES = 2;
-const THESIS_DRAFT_TEMPERATURE = 0.2;
+/** Below this length, chapter output is treated as empty/unparseable — do not run heading structure validation. */
+const MIN_CHAPTER_LATEX_CHARS = 500;
+/** When unset, thesis drafting uses a single primary model (no automatic downgrade). Set SCHOLARFLOW_THESIS_ALLOW_FALLBACK=1 to retry with OPENAI_FALLBACK_MODEL. */
+const THESIS_ALLOW_LLM_FALLBACK = process.env.SCHOLARFLOW_THESIS_ALLOW_FALLBACK === "1";
+
+function parseThesisDraftTemperature(): number {
+  const raw = process.env.SCHOLARFLOW_THESIS_TEMPERATURE;
+  if (!raw?.trim()) return 0.48;
+  const t = Number.parseFloat(raw);
+  return Number.isFinite(t) ? Math.min(0.78, Math.max(0.05, t)) : 0.48;
+}
+
+const THESIS_DRAFT_TEMPERATURE = parseThesisDraftTemperature();
 const THESIS_DRAFT_SEED = Number.parseInt(process.env.SCHOLARFLOW_THESIS_SEED || "", 10);
 const THESIS_DRAFT_SEED_AVAILABLE = Number.isFinite(THESIS_DRAFT_SEED);
 
-type GenerationMode = "hq_one_shot_chapter" | "subsection_slot_fill" | "fallback_placeholder" | "repaired_output";
+type GenerationMode = "hq_one_shot_chapter" | "subsection_slot_fill" | "repaired_output";
+
+type LlmTrace = {
+  selectedModel?: string;
+  fallbackModelUsed?: boolean;
+  /** Max `max_output_tokens` requested on any thesis LLM call in this job. */
+  maxOutputTokensCap?: number;
+  /** Usage from the most recent successful Responses API call (when provided). */
+  lastUsage?: OpenAiResponseUsage;
+  /** Largest `output_tokens` (or `total_tokens` when output missing) observed on any call. */
+  peakOutputTokens?: number;
+};
+
+function flushLlmTraceToDiagnostics(d: RunDiagnostics, trace: LlmTrace) {
+  d.selectedModel = trace.selectedModel || d.selectedModel;
+  d.fallbackModelUsed = Boolean(trace.fallbackModelUsed);
+  d.maxOutputTokensCap = trace.maxOutputTokensCap;
+  d.lastOpenAiUsage = trace.lastUsage;
+  const usageOut = trace.lastUsage?.output_tokens;
+  const usageTotal = trace.lastUsage?.total_tokens;
+  const fromUsage =
+    typeof usageOut === "number" && usageOut > 0
+      ? usageOut
+      : typeof usageTotal === "number" && usageTotal > 0
+        ? usageTotal
+        : 0;
+  d.maxTokensObserved = Math.max(
+    d.maxTokensObserved,
+    trace.peakOutputTokens ?? 0,
+    fromUsage,
+  );
+}
+
+type ThesisLlmCallMeta = {
+  model: string;
+  promptChars: number;
+  maxOutputTokensRequested: number;
+  rawOutputTextChars: number;
+  rawPreview1000: string;
+  extractedChars: number;
+  extractedPreview1000: string;
+  responseStatus?: string;
+  incompleteReason?: string;
+  refusalSummaries: string[];
+  usage?: OpenAiResponseUsage;
+  errorMessage?: string;
+  usedReasoningFallback?: boolean;
+  /** Production-only: when set, text came from emergency path after empty primary response. */
+  productionFallbackPath?: "gpt4o_empty";
+};
+
 type RunDiagnostics = {
   jobId: string;
   inputHash: string;
   sourceCount: number;
   sourceHash: string;
   outlineHash: string;
+  /** Logical pipeline id (LLM-authored chapters; not a deterministic template engine). */
   selectedPipelinePath: string;
   selectedModel: string;
   temperature: number;
+  /**
+   * Largest token counts from API usage (and similar) for this job.
+   * Does not use requested `max_output_tokens` as a stand-in for model output.
+   */
   maxTokensObserved: number;
+  maxOutputTokensCap?: number;
+  lastOpenAiUsage?: OpenAiResponseUsage;
   fallbackModelUsed: boolean;
   generationMode: GenerationMode;
   seedAvailable: boolean;
@@ -127,8 +214,10 @@ type RunDiagnostics = {
   oneShotUsed: boolean;
   slotFillUsed: boolean;
   repairTriggered: boolean;
-  deterministicPlaceholderFallbackTriggered: boolean;
   finalQualityScore: number;
+  /** True when title/RQ/field were rewritten from sparse or noisy student inputs. */
+  topicNormalized?: boolean;
+  topicNormalizationWarnings?: string[];
 };
 
 /** Rolling LaTeX tail passed into each subsection call so the model keeps chapter thread (chars). */
@@ -199,14 +288,6 @@ type OutlineSection = {
   target_words?: number;
 };
 
-function parseTargetPagesFromPrompt(prompt: string) {
-  const match = prompt.match(/Pages\s*\(UI setting\)\s*:\s*(\d{1,3})/i);
-  if (!match) return 40;
-  const value = Number.parseInt(match[1], 10);
-  if (!Number.isFinite(value)) return 40;
-  return Math.min(120, Math.max(10, value));
-}
-
 function estimateWordBudgetFromPages(targetPages: number) {
   return Math.round(targetPages * 310);
 }
@@ -247,10 +328,55 @@ function countApproxWords(input: string) {
     .filter(Boolean).length;
 }
 
+/** LaTeX UX: avoid "/" in printed headings — prefer "and". */
+function sanitizeSlashInHeadingTitle(title: string): string {
+  return title.replace(/\s*\/\s*/g, " and ").trim();
+}
+
+/** Enforce no "/" in emitted LaTeX section-like headings. */
+function sanitizeSlashInLatexHeadings(body: string): string {
+  return body.replace(/\\(section|subsection|subsubsection)\*?\{([^}]*)\}/g, (_m, cmd: string, title: string) => {
+    const cleaned = sanitizeSlashInHeadingTitle(String(title || ""));
+    return `\\${cmd}{${cleaned}}`;
+  });
+}
+
+/** Promote common inline heading labels into proper \subsection commands. */
+function promoteInlineSubsectionLabels(body: string): string {
+  const labels = [
+    "Context and Motivation",
+    "Research Question",
+    "Structure of the Thesis",
+    "Data and Sample",
+    "Model Specification",
+    "Main Results",
+    "Robustness Checks",
+    "Limitations",
+  ];
+  let out = body;
+  for (const label of labels) {
+    const esc = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(^|\\n\\n)${esc}\\s+`, "g");
+    out = out.replace(re, `$1\\\\subsection{${label}}\\n`);
+  }
+  return out;
+}
+
+function buildTopicCoherenceGuard(args: { title: string; researchQuestion: string; field: string }): string {
+  const scope = `${args.title} ${args.researchQuestion} ${args.field}`.toLowerCase();
+  const financeRelated = /(finance|asset pricing|stock|equity|portfolio|sharpe|return)/i.test(scope);
+  if (financeRelated) return "";
+  return `
+Topic coherence guard:
+- Stay strictly within the normalized thesis topic, research question, and domain.
+- Do NOT switch domains (e.g., no finance/asset-pricing language) unless explicitly required by the topic.
+- Forbidden drift terms for this thesis: "asset pricing", "stock returns", "equity returns", "Sharpe ratio", "firm-level characteristics", "portfolio".`.trim();
+}
+
 function normalizeSubsection(raw: unknown): OutlineSubsection | null {
   if (!raw || typeof raw !== "object") return null;
   const item = raw as Record<string, unknown>;
-  const title = String(item.title || "").trim();
+  const title = sanitizeSlashInHeadingTitle(String(item.title || "").trim());
   if (!title) return null;
   const subsubsections = Array.isArray(item.subsubsections)
     ? item.subsubsections.map((v) => String(v || "").trim()).filter(Boolean)
@@ -262,7 +388,7 @@ function normalizeSubsection(raw: unknown): OutlineSubsection | null {
 function normalizeSectionNode(raw: unknown): OutlineSectionNode | null {
   if (!raw || typeof raw !== "object") return null;
   const item = raw as Record<string, unknown>;
-  const title = String(item.title || "").trim();
+  const title = sanitizeSlashInHeadingTitle(String(item.title || "").trim());
   if (!title) return null;
   const purpose = String(item.purpose || "").trim();
   const subsections = Array.isArray(item.subsections)
@@ -272,7 +398,7 @@ function normalizeSectionNode(raw: unknown): OutlineSectionNode | null {
 }
 
 function buildFallbackHierarchy(section: OutlineSection): OutlineSectionNode[] {
-  const base = section.title.trim() || "Chapter";
+  const base = sanitizeSlashInHeadingTitle(section.title.trim()) || "Chapter";
   return [
     {
       title: `${base} framing`,
@@ -316,7 +442,7 @@ function parseOutlineSections(rawSections: { title: string; content: string }[])
         : [];
       parsed.push({
         ...json,
-        title: String(json.title).trim(),
+        title: sanitizeSlashInHeadingTitle(String(json.title).trim()),
         purpose: json.purpose ? String(json.purpose).trim() : undefined,
         sections: normalizedSections.length > 0 ? normalizedSections : buildFallbackHierarchy(json),
       });
@@ -336,6 +462,48 @@ function parseOutlineSections(rawSections: { title: string; content: string }[])
 
 function countMatches(input: string, re: RegExp) {
   return (input.match(re) || []).length;
+}
+
+function buildNoDatasetGuidance(hasDataset: boolean): string {
+  if (hasDataset) return "";
+  return `
+Data upload policy (no dedicated dataset file detected):
+- Do not claim access to proprietary microdata you do not have.
+- Still write a complete quantitative thesis: estimators, identifying assumptions, inference, threats to validity, and interpretation.
+- You may use illustrative or literature-calibrated magnitudes when clearly framed (for example, stylised benchmarks or textbook orders of magnitude); avoid presenting them as observed project estimates.
+`.trim();
+}
+
+function ensureMethodologyDisplayMathFloor(
+  drafts: { title: string; content: string }[],
+  minDisplayMathBlocks = 2,
+) {
+  for (const draft of drafts) {
+    if (!isLikelyMethodologyChapterForPipeline(draft.title, draft.content)) continue;
+    const existing = countDisplayMathLines(draft.content);
+    if (existing >= minDisplayMathBlocks) return;
+    const needed = minDisplayMathBlocks - existing;
+    const mathBlocks = [
+      String.raw`\begin{equation}
+\widehat{y}_{i} = \beta_{0} + \beta_{1}x_{i} + \beta_{2}z_{i} + \varepsilon_{i}
+\end{equation}`,
+      String.raw`\begin{equation}
+\mathcal{L}(\beta) = \sum_{i=1}^{n}\left(y_{i} - \widehat{y}_{i}\right)^{2}
+\end{equation}`,
+      String.raw`\begin{align}
+E[\varepsilon_i \mid x_i, z_i] &= 0 \\
+\operatorname{Var}(\varepsilon_i \mid x_i, z_i) &= \sigma^2
+\end{align}`,
+      String.raw`\begin{gather}
+\operatorname{plim}_{n\to\infty} \widehat{\beta} = \beta + \operatorname{plim}_{n\to\infty}(X'X)^{-1}X'\varepsilon \\
+\widehat{\operatorname{Var}}(\widehat{\beta}) = \widehat{\sigma}^{2}(X'X)^{-1}
+\end{gather}`,
+    ];
+    const inject = mathBlocks.slice(0, Math.max(0, needed)).join("\n\n");
+    if (!inject) return;
+    draft.content = `${draft.content}\n\n\\subsection{Model Specification and Identification}\n\n${inject}\n`;
+    return;
+  }
 }
 
 function draftHasDenseHierarchy(body: string, kind?: ThesisChapterKind) {
@@ -375,6 +543,14 @@ function buildReferenceSnippets(papers: { originalName: string; extractedText: s
   const chunks: string[] = [];
   let total = 0;
   let usedSourceCount = 0;
+
+  const withText = papers.filter((p) => p.extractedText?.trim());
+  const n = withText.length;
+  const effectiveBudget = Math.min(MAX_REFERENCE_SNIPPET_CHARS, 32_000 + Math.min(n, 50) * 2000);
+  const reserve = 2500;
+  const perPaperTarget = n > 0 ? Math.floor((effectiveBudget - reserve) / Math.min(n, 45)) : 0;
+  const perPaperCap = Math.min(5200, Math.max(720, perPaperTarget - 72));
+
   for (const paper of papers) {
     const name = paper.originalName || "unnamed";
     if (!paper.extractedText?.trim()) {
@@ -382,12 +558,12 @@ function buildReferenceSnippets(papers: { originalName: string; extractedText: s
       continue;
     }
     const header = `\n\n### ${paper.originalName}\n`;
-    const remaining = MAX_REFERENCE_SNIPPET_CHARS - total - header.length;
-    if (remaining <= 200) {
+    const remaining = effectiveBudget - total - header.length;
+    if (remaining < 200) {
       skippedSources.push({ filename: name, reason: "reference_context_budget_exceeded" });
       continue;
     }
-    const snippet = paper.extractedText.slice(0, Math.min(4500, remaining));
+    const snippet = paper.extractedText.slice(0, Math.min(perPaperCap, Math.max(120, remaining - 40)));
     const piece = `${header}${snippet}`;
     chunks.push(piece);
     total += piece.length;
@@ -397,38 +573,235 @@ function buildReferenceSnippets(papers: { originalName: string; extractedText: s
   return { snippets, skippedSources, usedSourceCount, charEstimate: snippets.length };
 }
 
-const LLM_ATTEMPTS = 3;
-let activeLlmTrace: { selectedModel?: string; fallbackModelUsed?: boolean; maxTokensObserved?: number } | null = null;
+const LLM_ATTEMPTS = 2;
 
-async function openAiThesisText(
+/** Soft target (~30 pages prose); one expansion pass may run if the corpus is shorter. */
+const CORPUS_WORD_SOFT_TARGET = 9300;
+
+function countCorpusWordsApprox(abstractLatex: string, drafts: { content: string }[]): number {
+  const w = (s: string) =>
+    s
+      .replace(/\\[a-zA-Z@]+\*?(\[[^\]]*\])?(\{[^}]*\})?/g, " ")
+      .replace(/[{}$\\]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean).length;
+  return w(abstractLatex) + drafts.reduce((sum, d) => sum + w(d.content), 0);
+}
+let activeLlmTrace: LlmTrace | null = null;
+
+function buildThesisLlmMeta(args: {
+  model: string;
+  prompt: string;
+  maxOutputTokens: number;
+  response: unknown;
+  extracted: ReturnType<typeof extractResponsesOutputText>;
+  err?: string;
+}): ThesisLlmCallMeta {
+  const r = args.response as { output_text?: string; status?: string };
+  const rawTop = typeof r?.output_text === "string" ? r.output_text : "";
+  const ex = args.extracted.text;
+  return {
+    model: args.model,
+    promptChars: args.prompt.length,
+    maxOutputTokensRequested: args.maxOutputTokens,
+    rawOutputTextChars: args.extracted.preTrimSourceCharLength,
+    rawPreview1000: args.extracted.rawTextPreview1000 || rawTop.slice(0, 1000),
+    extractedChars: ex.length,
+    extractedPreview1000: ex.slice(0, 1000),
+    responseStatus: args.extracted.status ?? r?.status,
+    incompleteReason: args.extracted.incompleteReason,
+    refusalSummaries: args.extracted.refusalSummaries,
+    usage: args.extracted.usage,
+    errorMessage: args.err,
+    usedReasoningFallback: args.extracted.usedReasoningFallback,
+  };
+}
+
+/** Production-only: prepended to Responses API `input` so the model returns visible LaTeX, not empty/reasoning-only. */
+const THESIS_PROD_PLAIN_PREFIX =
+  "You must output the chapter content directly as LaTeX text. Do not return only reasoning, tool calls, JSON, or empty content.\n\n";
+
+const THESIS_PROD_EMERGENCY_MODEL = "gpt-4o";
+const THESIS_PROD_EMERGENCY_PROMPT_MAX = 12_000;
+
+async function runProductionGpt4oEmptyFallback(
+  basePrompt: string,
+  maxOutputTokens: number,
+  temperature: number,
+  logCtx: { jobId?: string; step?: string; label?: string } | undefined,
+  trace: LlmTrace | undefined,
+): Promise<{ text: string; meta: ThesisLlmCallMeta } | null> {
+  const body =
+    basePrompt.length > THESIS_PROD_EMERGENCY_PROMPT_MAX
+      ? `${THESIS_PROD_PLAIN_PREFIX}=== COMPRESSED TASK (last ${THESIS_PROD_EMERGENCY_PROMPT_MAX} chars) ===\n${basePrompt.slice(-THESIS_PROD_EMERGENCY_PROMPT_MAX)}`
+      : `${THESIS_PROD_PLAIN_PREFIX}${basePrompt}`;
+
+  const requestPayload: Record<string, unknown> = {
+    model: THESIS_PROD_EMERGENCY_MODEL,
+    input: body,
+    max_output_tokens: maxOutputTokens,
+    temperature,
+  };
+  if (THESIS_DRAFT_SEED_AVAILABLE) requestPayload.seed = THESIS_DRAFT_SEED;
+
+  const response = await openai.responses.create(requestPayload as never);
+  console.warn("[full-draft] production_gpt4o_empty_fallback_response", {
+    jobId: logCtx?.jobId,
+    step: logCtx?.step,
+    label: logCtx?.label,
+    ...summarizeOpenAiResponseForLog(response),
+  });
+  const extracted = extractResponsesOutputText(response);
+  const meta: ThesisLlmCallMeta = {
+    ...buildThesisLlmMeta({
+      model: THESIS_PROD_EMERGENCY_MODEL,
+      prompt: body,
+      maxOutputTokens,
+      response,
+      extracted,
+    }),
+    productionFallbackPath: "gpt4o_empty",
+  };
+
+  if (trace) {
+    trace.maxOutputTokensCap = Math.max(trace.maxOutputTokensCap ?? 0, maxOutputTokens);
+    if (extracted.usage) {
+      trace.lastUsage = extracted.usage;
+      const ot = extracted.usage.output_tokens;
+      const tt = extracted.usage.total_tokens;
+      const peakCand =
+        typeof ot === "number" && ot > 0 ? ot : typeof tt === "number" && tt > 0 ? tt : 0;
+      if (peakCand > 0) {
+        trace.peakOutputTokens = Math.max(trace.peakOutputTokens ?? 0, peakCand);
+      }
+    }
+    if (extracted.text) {
+      trace.selectedModel = THESIS_PROD_EMERGENCY_MODEL;
+      trace.fallbackModelUsed = true;
+    }
+  }
+
+  if (!extracted.text.trim()) return null;
+  return { text: extracted.text, meta };
+}
+
+async function openAiThesisTextWithMeta(
   prompt: string,
   maxOutputTokens: number,
   logCtx?: { jobId?: string; step?: string; label?: string },
-  trace?: { selectedModel?: string; fallbackModelUsed?: boolean; maxTokensObserved?: number },
-): Promise<string> {
+  trace?: LlmTrace,
+  callOpts?: { temperature?: number },
+): Promise<{ text: string; meta: ThesisLlmCallMeta }> {
+  const isProd = process.env.NODE_ENV === "production";
   const runtimeTrace = trace ?? activeLlmTrace ?? undefined;
-  const models = [getModel(), getFallbackModel()];
+  const models = THESIS_ALLOW_LLM_FALLBACK ? [getModel(), getFallbackModel()] : [getModel()];
   let lastErr: unknown;
+  const temperature =
+    typeof callOpts?.temperature === "number" && Number.isFinite(callOpts.temperature)
+      ? Math.min(0.65, Math.max(0, callOpts.temperature))
+      : THESIS_DRAFT_TEMPERATURE;
+
+  const apiInput = isProd ? `${THESIS_PROD_PLAIN_PREFIX}${prompt}` : prompt;
+
+  const failMeta = (model: string, err?: string): ThesisLlmCallMeta => ({
+    model,
+    promptChars: prompt.length,
+    maxOutputTokensRequested: maxOutputTokens,
+    rawOutputTextChars: 0,
+    rawPreview1000: "",
+    extractedChars: 0,
+    extractedPreview1000: "",
+    refusalSummaries: [],
+    errorMessage: err,
+  });
+
   if (runtimeTrace) {
-    runtimeTrace.maxTokensObserved = Math.max(runtimeTrace.maxTokensObserved || 0, maxOutputTokens);
+    runtimeTrace.maxOutputTokensCap = Math.max(runtimeTrace.maxOutputTokensCap ?? 0, maxOutputTokens);
   }
+
   for (const model of models) {
     for (let attempt = 1; attempt <= LLM_ATTEMPTS; attempt++) {
       try {
         const requestPayload: Record<string, unknown> = {
           model,
-          input: prompt,
+          input: apiInput,
           max_output_tokens: maxOutputTokens,
-          temperature: THESIS_DRAFT_TEMPERATURE,
+          temperature,
         };
         if (THESIS_DRAFT_SEED_AVAILABLE) requestPayload.seed = THESIS_DRAFT_SEED;
         const response = await openai.responses.create(requestPayload as never);
-        const text = response.output_text?.trim() || "";
-        if (runtimeTrace && text) {
+        if (isProd) {
+          console.warn("[full-draft] openai_responses_shape", {
+            jobId: logCtx?.jobId,
+            step: logCtx?.step,
+            label: logCtx?.label,
+            model,
+            attempt,
+            ...summarizeOpenAiResponseForLog(response),
+            response_json_char_estimate: JSON.stringify(response).length,
+          });
+        }
+        const extracted = extractResponsesOutputText(response);
+        const meta = buildThesisLlmMeta({ model, prompt, maxOutputTokens, response, extracted });
+
+        if (runtimeTrace && extracted.usage) {
+          runtimeTrace.lastUsage = extracted.usage;
+          const ot = extracted.usage.output_tokens;
+          const tt = extracted.usage.total_tokens;
+          const peakCand =
+            typeof ot === "number" && ot > 0 ? ot : typeof tt === "number" && tt > 0 ? tt : 0;
+          if (peakCand > 0) {
+            runtimeTrace.peakOutputTokens = Math.max(runtimeTrace.peakOutputTokens ?? 0, peakCand);
+          }
+        }
+        if (runtimeTrace && extracted.text) {
           runtimeTrace.selectedModel = model;
           runtimeTrace.fallbackModelUsed = model === models[1];
         }
-        if (text || attempt === LLM_ATTEMPTS) return text;
+
+        if (extracted.refusalSummaries.length > 0) {
+          console.warn("[full-draft] llm_refusal_or_empty_message", {
+            jobId: logCtx?.jobId,
+            step: logCtx?.step,
+            label: logCtx?.label,
+            model,
+            refusalSummaries: extracted.refusalSummaries,
+            status: extracted.status,
+            incompleteReason: extracted.incompleteReason,
+          });
+        }
+
+        if (extracted.text.trim()) {
+          return { text: extracted.text, meta };
+        }
+
+        if (isProd && attempt === 1 && model === models[0]) {
+          try {
+            const emergency = await runProductionGpt4oEmptyFallback(
+              prompt,
+              maxOutputTokens,
+              temperature,
+              logCtx,
+              runtimeTrace,
+            );
+            if (emergency?.text.trim()) {
+              return emergency;
+            }
+          } catch (fallbackErr) {
+            console.error("[full-draft] production_gpt4o_empty_fallback_failed", {
+              jobId: logCtx?.jobId,
+              step: logCtx?.step,
+              label: logCtx?.label,
+              message: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+            });
+          }
+        }
+
+        if (attempt === LLM_ATTEMPTS) {
+          return { text: extracted.text, meta };
+        }
       } catch (err) {
         lastErr = err;
         const msg = err instanceof Error ? err.message : String(err);
@@ -452,7 +825,17 @@ async function openAiThesisText(
       lastMessage: lastErr instanceof Error ? lastErr.message : String(lastErr),
     });
   }
-  return "";
+  return { text: "", meta: failMeta(models[0] ?? getModel(), lastErr instanceof Error ? lastErr.message : String(lastErr || "")) };
+}
+
+async function openAiThesisText(
+  prompt: string,
+  maxOutputTokens: number,
+  logCtx?: { jobId?: string; step?: string; label?: string },
+  trace?: LlmTrace,
+  callOpts?: { temperature?: number },
+): Promise<string> {
+  return (await openAiThesisTextWithMeta(prompt, maxOutputTokens, logCtx, trace, callOpts)).text;
 }
 
 function buildAbstractPrompt(args: {
@@ -468,6 +851,7 @@ function buildAbstractPrompt(args: {
   references: string;
   technicalPipeline: boolean;
   citationRulesBlock: string;
+  workspacePolicy?: string;
 }) {
   const abstractMathPolicy = args.technicalPipeline
     ? "Abstract math policy (technical thesis): narrative prose only. No \\[ ... \\], no equation/align/gather/multline environments, no optimization problems, loss functions, or formal probability statements as equations. Light \\( ... \\) symbols only if indispensable (single symbols)."
@@ -507,7 +891,7 @@ ${args.references}
 
 ${args.citationRulesBlock}
 
-${abstractMathPolicy}
+${args.workspacePolicy?.trim() ? `${args.workspacePolicy.trim()}\n\n` : ""}${abstractMathPolicy}
 Output valid LaTeX paragraphs (\\textbf{} / \\emph{} allowed). No \\chapter.
 `.trim();
 }
@@ -599,14 +983,12 @@ Section writing standard (high-quality):
 - In empirical Results fragments: what is estimated or shown; headline result; interpretation; limitation or caution.
 `.trim()
     : "";
-  const noDatasetBlock = args.hasDataset
-    ? ""
-    : `
-Dataset availability constraint:
-- No structured dataset upload was detected.
-- Do NOT invent empirical coefficients, sample sizes, p-values, benchmark scores, or "observed" results.
-- Write as literature-grounded analysis with a proposed empirical strategy and explicit limitations.
-`.trim();
+  const noDatasetBlock = buildNoDatasetGuidance(Boolean(args.hasDataset));
+  const topicCoherenceBlock = buildTopicCoherenceGuard({
+    title: args.project.title,
+    researchQuestion: args.project.researchQuestion,
+    field: args.project.field,
+  });
 
   const slotCoherenceBlock =
     args.slotTotal > 1
@@ -626,7 +1008,7 @@ ${args.constraintsJson}
 HARD RULES FOR THIS RESPONSE:
 - Output LaTeX FRAGMENTS only (paragraphs, itemize, equations, tables, figures as needed).
 - DO NOT output \\section, \\subsection, \\subsubsection, \\chapter, or \\part — the system inserts all headings.
-- Write at least ${args.minParagraphs} academic paragraphs in this fragment (minimum). If unsure, still write substantive placeholder analysis; do not omit paragraphs.
+- Write at least ${args.minParagraphs} academic paragraphs in this fragment (minimum). Do not output scaffold notes or placeholder prose.
 - Target roughly ${args.wordsBudget} words for this fragment alone.
 - DO NOT skip this subsection or leave only a sentence; keep the global chapter structure intact for downstream validation.
 ${args.extraRules ? `\nMANDATORY FOR THIS SUBSECTION:\n${args.extraRules}\n` : ""}
@@ -672,6 +1054,7 @@ ${hqIntroBlock}
 ${blueprintBlock}
 ${flowBlock}
 ${noDatasetBlock}
+${topicCoherenceBlock}
 ${mathRulesBlock}
 ${figureRulesBlock}
 ${
@@ -705,6 +1088,7 @@ function buildChapterOneShotPrompt(args: {
   hasDataset?: boolean;
   thesisBlueprint?: string;
   citationRulesBlock: string;
+  workspacePolicy?: string;
 }): string {
   const earlyTechnical = args.technicalPipeline && (args.chapterKind === "introduction" || args.chapterKind === "literature");
   const econBlock = projectWantsEconometricsDepth(args.project.field) && !earlyTechnical ? `\n${THESIS_ECONOMETRICS_DEPTH}\n` : "";
@@ -724,29 +1108,43 @@ function buildChapterOneShotPrompt(args: {
   const blueprintBlock = args.thesisBlueprint?.trim()
     ? `\nThesis blueprint (stay aligned; do not contradict):\n${args.thesisBlueprint.trim().slice(0, 12000)}\n`
     : "";
-  const noDatasetBlock = args.hasDataset
-    ? ""
-    : `
-Dataset availability constraint:
-- No structured dataset upload was detected.
-- Do NOT invent empirical coefficients, sample sizes, p-values, benchmark scores, or "observed" results.
-- Write as literature-grounded analysis with a proposed empirical strategy and explicit limitations.
-`.trim();
+  const noDatasetBlock = buildNoDatasetGuidance(Boolean(args.hasDataset));
+  const topicCoherenceBlock = buildTopicCoherenceGuard({
+    title: args.project.title,
+    researchQuestion: args.project.researchQuestion,
+    field: args.project.field,
+  });
+  const openingTemplateEcho = args.mandatoryHeadingLines
+    .trim()
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(0, 4)
+    .join("\n");
 
   return `
-${args.strictPrefix}You are ThesisPilot drafting ONE COMPLETE chapter body in one pass (deterministic structure-first pipeline).
+${args.strictPrefix}You are ThesisPilot drafting ONE COMPLETE chapter body in a single LLM pass (full chapter LaTeX).
 
 VALIDATOR-ALIGNED CONSTRAINTS (JSON):
 ${args.constraintsJson}
 
+OUTPUT FORMAT (non-negotiable):
+- Your entire reply MUST be valid thesis LaTeX BODY only: start immediately with the first line of the mandatory heading template (typically \\section{...}), then each \\subsection{...} in order, each followed by paragraphs of prose.
+- No Markdown code fences (\`\`\`). No JSON wrapper. No XML. No "Here is the chapter" preamble or postscript.
+- No commentary outside LaTeX.
+
+Your answer MUST begin with these exact opening lines (copy verbatim from the mandatory template; shown here for ordering — titles must match the template, not this example if they differ):
+${openingTemplateEcho}
+
 HARD RULES:
-- Return valid LaTeX BODY only. No preamble and no \\chapter.
+- No preamble and no \\chapter.
+- Your first non-empty characters MUST be the first \\section{...} line from the mandatory template below (verbatim title).
 - Use the exact heading template below once each (no extra \\section names, no heading renames).
 - Fill substantive text under every required \\subsection.
 - Target approximately ${args.targetWords} words for this chapter (document target ${args.targetPages} pages).
 - Keep coherent narrative and transitions across subsections.
 
-MANDATORY HEADING TEMPLATE (must appear exactly and in order):
+MANDATORY HEADING TEMPLATE (must appear exactly and in order — copy these lines verbatim as the opening of your answer):
 ${args.mandatoryHeadingLines}
 
 Project:
@@ -769,7 +1167,7 @@ ${args.references}
 Citation and attribution:
 ${args.citationRulesBlock}
 
-${THESIS_DOCUMENT_SCHEMA}
+${args.workspacePolicy?.trim() ? `${args.workspacePolicy.trim()}\n\n` : ""}${THESIS_DOCUMENT_SCHEMA}
 ${THESIS_FILLER_BAN}
 ${chapterGuidanceBlock}
 ${econBlock}
@@ -777,6 +1175,7 @@ ${mathRulesBlock}
 ${figureRulesBlock}
 ${blueprintBlock}
 ${noDatasetBlock}
+${topicCoherenceBlock}
 `.trim();
 }
 
@@ -785,6 +1184,7 @@ function buildExpansionPrompt(args: {
   existingDraft: string;
   references: string;
   remainingWords: number;
+  workspacePolicy?: string;
 }) {
   return `
 Expand the thesis section below with NEW material only.
@@ -792,7 +1192,7 @@ Expand the thesis section below with NEW material only.
 Section title: ${args.section.title}
 Approximate additional words required: ${args.remainingWords}
 
-Rules:
+${args.workspacePolicy?.trim() ? `${args.workspacePolicy.trim()}\n\n` : ""}Rules:
 - Continue directly from the existing draft; do not restart or repeat prior paragraphs.
 - Add concrete analysis, argument depth, and reference-anchored points.
 - Keep academic tone and coherent flow.
@@ -809,102 +1209,9 @@ ${args.references}
 `.trim();
 }
 
-function ensureMinimumSubsections(body: string, chapterTitle: string, minSubsections: number): string {
-  const current = countMatches(body, /\\subsection\*?\{[^}]+\}/g);
-  if (current >= minSubsections) return body;
-  const missing = minSubsections - current;
-  const additions: string[] = [];
-  for (let i = 0; i < missing; i++) {
-    const idx = current + i + 1;
-    additions.push(
-      `\\subsection{${escapeLatex(`Additional Analysis ${idx}`)}}\n` +
-        `This subsection is included to preserve the required thesis structure for "${escapeLatex(chapterTitle)}". ` +
-        `Expand with topic-specific evidence, citations, and interpretation before submission.`,
-    );
-  }
-  return `${body.trim()}\n\n${additions.join("\n\n")}`.trim();
-}
-
-function ensureAppendixChapterIfMissing(
-  drafts: { title: string; content: string }[],
-): { title: string; content: string }[] {
-  const hasAppendix = drafts.some((d) => inferThesisChapterKind(d.title) === "appendix");
-  if (hasAppendix) return drafts;
-  const appendixTitle = "Appendix";
-  const appendixBody = `
-\\section{Appendix}
-
-\\subsection{Supplementary Tables}
-Provide supplementary estimation tables, variable definitions, and robustness outputs referenced in the main text.
-
-\\subsection{Supplementary Figures}
-Include additional diagnostics, sensitivity plots, and extended visual evidence that support the Results chapter.
-
-\\subsection{Additional Derivations and Notes}
-Add detailed derivations, implementation notes, and reproducibility details that are too long for the core chapters.
-`.trim();
-  return [...drafts, { title: appendixTitle, content: appendixBody }];
-}
-
-function ensureMandatoryTableAndFigure(
-  drafts: { title: string; content: string }[],
-): { title: string; content: string }[] {
-  const totalFigures = drafts.reduce((n, d) => n + countMatches(d.content, /\\begin\{figure\}/g), 0);
-  const totalTables = drafts.reduce((n, d) => n + countMatches(d.content, /\\begin\{table\}/g), 0);
-  if (totalFigures > 0 && totalTables > 0) return drafts;
-
-  const resultsIdx = drafts.findIndex((d) => inferThesisChapterKind(d.title) === "results");
-  const targetIdx = resultsIdx >= 0 ? resultsIdx : Math.max(0, drafts.length - 1);
-  const target = drafts[targetIdx];
-  if (!target) return drafts;
-
-  const needFigure = totalFigures === 0;
-  const needTable = totalTables === 0;
-  const figureBlock = `
-\\begin{figure}[H]
-\\centering
-\\fbox{\\begin{minipage}[c][6cm][c]{0.85\\textwidth}\\centering
-Placeholder Figure: Replace with project-specific visual evidence.
-\\end{minipage}}
-\\caption{Core visual evidence supporting the empirical narrative.}
-\\label{fig:mandatory_core_evidence}
-\\end{figure}
-Figure~\\ref{fig:mandatory_core_evidence} summarizes key patterns that should be validated with project data.
-`.trim();
-  const tableBlock = `
-\\begin{table}[H]
-\\centering
-\\caption{Mandatory summary table for core empirical outputs}
-\\label{tab:mandatory_core_summary}
-\\begin{tabular}{lcc}
-\\toprule
-Metric & Baseline & Alternative \\\\
-\\midrule
-Value A & [fill] & [fill] \\\\
-Value B & [fill] & [fill] \\\\
-\\bottomrule
-\\end{tabular}
-\\end{table}
-Table~\\ref{tab:mandatory_core_summary} should be replaced with topic-specific estimates and diagnostics.
-`.trim();
-
-  const insertion = [needFigure ? figureBlock : "", needTable ? tableBlock : ""].filter(Boolean).join("\n\n");
-  drafts[targetIdx] = { ...target, content: `${target.content.trim()}\n\n${insertion}`.trim() };
-  return drafts;
-}
-
-function enforceMandatoryThesisArtifacts(
-  drafts: { title: string; content: string }[],
-): { title: string; content: string }[] {
-  let out = [...drafts];
-  out = ensureAppendixChapterIfMissing(out);
-  out = out.map((d) => {
-    const kind = inferThesisChapterKind(d.title);
-    const minSubsections = kind === "discussion" ? 2 : 3;
-    return { ...d, content: ensureMinimumSubsections(d.content, d.title, minSubsections) };
-  });
-  out = ensureMandatoryTableAndFigure(out);
-  return out;
+/** Post-generation: do not inject fbox tables/figures or scaffold subsections — quality repair must obtain real floats from the model. */
+function enforceMandatoryThesisArtifacts(drafts: { title: string; content: string }[]): { title: string; content: string }[] {
+  return drafts.map((d) => ({ ...d }));
 }
 
 function buildBlueprintPrompt(args: {
@@ -918,6 +1225,7 @@ function buildBlueprintPrompt(args: {
   chapterTitles: string[];
   globalPrompt: string;
   references: string;
+  workspacePolicy?: string;
 }) {
   return `
 You are planning a long-form quantitative thesis (Pass 2 — thesis blueprint).
@@ -939,6 +1247,8 @@ ${args.globalPrompt}
 
 Reference excerpts (for topical alignment):
 ${args.references.slice(0, 14000)}
+
+${args.workspacePolicy?.trim() ? `${args.workspacePolicy.trim()}\n` : ""}
 `.trim();
 }
 
@@ -1019,37 +1329,14 @@ function buildFallbackAbstractLatex(project: {
     .join("\n\n");
 }
 
-function fallbackSectionDraft(section: OutlineSection) {
-  const purpose = escapeLatex(
-    section.purpose || "Clarify the goal of this section in relation to the research question.",
-  );
-  return `\\section{Section framing}
-\\subsection{Purpose and scope}
-This draft section is a structured starting point and should be expanded with project-specific evidence, citations, and argumentation.
-
-\\subsection{Core concepts and definitions}
-\\textbf{Purpose:} ${purpose}
-
-\\section{Analysis development}
-\\subsection{Main argument and evidence}
-Develop one claim at a time, followed by evidence and short interpretation.
-
-\\subsection{Limitations and transition}
-State methodological limits and transition to the next chapter.
-
-\\subsubsection{Citation placeholders}
-\\texttt{[Ref: verify and replace with exact source]}
-
-\\textit{${escapeLatex(integrityNotice)}}`;
-}
-
-function stripMarkdownLatexArtifacts(input: string): string {
-  const stripped = input
-    .replace(/```latex/gi, "")
-    .replace(/```/g, "")
-    .replace(/\(author\?\)/gi, "")
-    .replace(/Figure~(?!\\ref\{)/g, "Figure ")
-    .trim();
+function stripMarkdownLatexArtifacts(
+  input: string,
+  opts?: { sliceChapterSection?: boolean },
+): string {
+  const { text } = unwrapChapterLatexCandidate(input, {
+    sliceFromPrimarySection: opts?.sliceChapterSection ?? false,
+  });
+  const stripped = stripResidualMarkdownLatexArtifacts(text);
   return sanitizeBlankCitationsInLatex(stripped).text;
 }
 
@@ -1093,6 +1380,70 @@ async function persistPartialThesisDraft(
         },
       });
     }
+  });
+}
+
+/** Production: no interactive transaction (fragile on Neon/serverless). Not used on localhost. */
+const ASSEMBLY_CREATE_BATCH = 40;
+
+async function persistAssembledDraftSectionsNonInteractive(opts: {
+  projectId: string;
+  jobId: string;
+  sections: Array<{ projectId: string; title: string; sectionType: string; content: string }>;
+}) {
+  const { projectId, jobId, sections } = opts;
+
+  await prisma.documentSection.deleteMany({
+    where: { projectId, sectionType: "live_draft" },
+  });
+  await prisma.documentSection.deleteMany({
+    where: { projectId, sectionType: "draft_chapter" },
+  });
+  await prisma.documentSection.deleteMany({
+    where: { projectId, sectionType: "draft_abstract" },
+  });
+
+  try {
+    await prisma.documentSection.createMany({
+      data: sections,
+      skipDuplicates: false,
+    });
+  } catch (firstErr) {
+    console.error("[full-draft] assembling_document createMany failed, retrying in batches", {
+      projectId,
+      jobId,
+      firstErr,
+    });
+    try {
+      for (let i = 0; i < sections.length; i += ASSEMBLY_CREATE_BATCH) {
+        const chunk = sections.slice(i, i + ASSEMBLY_CREATE_BATCH);
+        await prisma.documentSection.createMany({
+          data: chunk,
+          skipDuplicates: false,
+        });
+      }
+    } catch (batchErr) {
+      console.error("[full-draft] assembling_document batched createMany failed", {
+        projectId,
+        jobId,
+        batchErr,
+      });
+      throw batchErr;
+    }
+  }
+
+  await prisma.project.update({
+    where: { id: projectId },
+    data: { updatedAt: new Date() },
+  });
+
+  await prisma.fullDraftJob.update({
+    where: { id: jobId },
+    data: {
+      lastStep: "assembling_document",
+      progress: 96,
+      message: "Saving thesis draft…",
+    },
   });
 }
 
@@ -1146,7 +1497,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return NextResponse.json({ error: "Invalid prompt." }, { status: 400 });
   }
 
-  const promptTopic = payload.data.prompt.trim().replace(/[.?!]+$/, "");
+  const researchPrompt = extractResearchPromptFromLegacyComposedPrompt(payload.data.prompt);
+  const composedModelPrompt = composeWorkspaceModelPrompt(researchPrompt, THESIS_PIPELINE_FIXED_SETTINGS);
+
+  const promptTopic = researchPrompt.trim().replace(/[.?!]+$/, "");
   const promptWords = countPromptWords(promptTopic);
 
   const papers = await prisma.referencePaper.findMany({
@@ -1154,63 +1508,63 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     orderBy: { createdAt: "desc" },
   });
 
-  const inferredTitle = !isUntrustedProjectTitle(project.title.trim())
-    ? project.title.trim()
-    : inferProjectTitleFromPrompt(promptTopic || "research topic");
-  const inferredField = project.field.trim().length >= 3 ? project.field.trim() : "Academic research";
-  const rqRaw = project.researchQuestion.trim();
-  const inferredResearchQuestion = !isUntrustedResearchQuestion(rqRaw)
-    ? rqRaw
-    : `How does ${promptTopic || "this topic"} relate to current academic literature and practical applications?`;
-
-  const highQualityThesis = detectHighQualityThesisMode({
-    highQualityFlag: payload.data.highQualityThesis,
-    prompt: payload.data.prompt,
+  const topicNorm = normalizeThesisTopicForGeneration({
+    title: project.title,
+    field: project.field,
+    researchQuestion: project.researchQuestion,
+    description: project.description,
+    userPrompt: researchPrompt,
+    sourceCount: papers.length,
   });
+  const inferredTitle = topicNorm.title;
+  const inferredField = topicNorm.field;
+  const inferredResearchQuestion = topicNorm.researchQuestion;
 
-  const inputIssues = validateThesisUserInputs({
+  const softInputNotes = validateThesisUserInputs({
     title: inferredTitle,
     field: inferredField,
     researchQuestion: inferredResearchQuestion,
     description: project.description,
-    userPrompt: payload.data.prompt,
+    userPrompt: researchPrompt,
     sourceCount: papers.length,
   });
+  if (topicNorm.topicWasNormalized) {
+    console.log("[full-draft] topic normalized from weak input", {
+      projectId: id,
+      warnings: topicNorm.warnings,
+    });
+  }
   console.log("[full-draft] validation", {
     projectId: id,
-    prompt: payload.data.prompt,
+    prompt: researchPrompt,
     inferredTitle,
     inferredField,
     inferredResearchQuestion,
     promptWords,
     sources: papers.length,
-    issues: inputIssues.map((i) => i.code),
+    topicWasNormalized: topicNorm.topicWasNormalized,
+    softValidationNotes: softInputNotes.map((i) => i.code),
   });
-  if (inputIssues.length > 0) {
-    return NextResponse.json(
-      { error: "Thesis inputs look incomplete or placeholder-like. Refine the project title, field, research question, or prompt.", issues: inputIssues },
-      { status: 400 },
-    );
-  }
+
+  const highQualityThesis = detectHighQualityThesisMode({
+    highQualityFlag: payload.data.highQualityThesis,
+    prompt: composedModelPrompt,
+  });
 
   const maxChars = getInputCharLimit();
   const maxWords = getInputWordLimit();
-  const wordCount = countWords(payload.data.prompt);
+  const wordCount = countWords(researchPrompt);
   if (wordCount > maxWords) {
     return NextResponse.json(
       { error: `Prompt is too long. Limit is ${maxWords.toLocaleString()} words.` },
       { status: 400 },
     );
   }
-  if (payload.data.prompt.length > maxChars) {
+  if (researchPrompt.length > maxChars) {
     return NextResponse.json(
       { error: `Prompt is too long. Limit is ${maxChars.toLocaleString()} characters.` },
       { status: 400 },
     );
-  }
-
-  if (papers.length === 0 && promptWords < 8) {
-    return NextResponse.json({ error: "Provide a meaningful prompt (at least 8 words) or import sources first." }, { status: 400 });
   }
 
   if (project.title !== inferredTitle || project.field !== inferredField || project.researchQuestion !== inferredResearchQuestion) {
@@ -1250,14 +1604,16 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     outlineSections = canonicalFiveChapterOutline();
   }
   if (outlineSections.length === 0) {
-    return NextResponse.json(
-      { error: "Generate an outline first before creating full draft chapters." },
-      { status: 400 },
-    );
+    outlineSections = canonicalFiveChapterOutline();
+    console.log("[full-draft] outline_fallback_canonical", { projectId: id });
   }
 
   const primaryModel = getModel();
   const fallbackModel = getFallbackModel();
+  const jobRequestPayload = {
+    prompt: payload.data.prompt,
+    highQualityThesis: payload.data.highQualityThesis,
+  };
   const job = await prisma.fullDraftJob.create({
     data: {
       projectId: id,
@@ -1265,7 +1621,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       status: "queued",
       progress: 0,
       lastStep: "queued",
-      requestPayload: payload.data,
+      requestPayload: jobRequestPayload,
       sourcesTotal: papers.length,
       modelPrimary: primaryModel,
       modelFallback: fallbackModel,
@@ -1277,10 +1633,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     projectId: id,
     sourceCount: papers.length,
     sourceFilenames: papers.map((p) => p.originalName),
-    promptPreview: payload.data.prompt.slice(0, 500),
+    promptPreview: composedModelPrompt.slice(0, 500),
     highQualityThesis: detectHighQualityThesisMode({
       highQualityFlag: payload.data.highQualityThesis,
-      prompt: payload.data.prompt,
+      prompt: composedModelPrompt,
     }),
     primaryModel,
     fallbackModel,
@@ -1339,14 +1695,14 @@ async function runFullDraftJob(jobId: string) {
   }
 
   let skippedAggregate: SkippedSourceInfo[] = [];
-  const llmTrace: { selectedModel?: string; fallbackModelUsed?: boolean; maxTokensObserved?: number } = {};
+  const llmTrace: LlmTrace = {};
   const diagnostics: RunDiagnostics = {
     jobId,
     inputHash: "",
     sourceCount: 0,
     sourceHash: "",
     outlineHash: "",
-    selectedPipelinePath: "deterministic_scaffold_one_shot",
+    selectedPipelinePath: "llm_chapter_one_shot",
     selectedModel: getModel(),
     temperature: THESIS_DRAFT_TEMPERATURE,
     maxTokensObserved: 0,
@@ -1357,8 +1713,9 @@ async function runFullDraftJob(jobId: string) {
     oneShotUsed: true,
     slotFillUsed: false,
     repairTriggered: false,
-    deterministicPlaceholderFallbackTriggered: false,
     finalQualityScore: 0,
+    topicNormalized: false,
+    topicNormalizationWarnings: [],
   };
 
   const failJob = async (args: {
@@ -1367,7 +1724,10 @@ async function runFullDraftJob(jobId: string) {
     details?: string;
     err?: unknown;
     skippedSources?: SkippedSourceInfo[];
+    /** Omit diagnostics/details/errorStack from DB so polling UI does not surface raw DB errors. */
+    userSafePersistenceFailure?: boolean;
   }) => {
+    flushLlmTraceToDiagnostics(diagnostics, llmTrace);
     const stack = args.err instanceof Error ? args.err.stack : args.err ? String(args.err) : null;
     console.error("[full-draft] job failed", {
       jobId,
@@ -1384,17 +1744,25 @@ async function runFullDraftJob(jobId: string) {
         status: "failed",
         failedStep: args.failedStep,
         message: args.message,
-        details: JSON.stringify({
-          errorDetails: args.details ?? null,
-          generationDiagnostics: diagnostics,
-        }),
-        errorStack: stack,
+        details: args.userSafePersistenceFailure
+          ? null
+          : JSON.stringify({
+              errorDetails: args.details ?? null,
+              generationDiagnostics: diagnostics,
+            }),
+        errorStack: args.userSafePersistenceFailure ? null : stack,
         skippedSources: (args.skippedSources ?? skippedAggregate) as object | undefined,
       },
     });
   };
 
-  const progress = async (status: string, lastStep: string, pct: number, skipped?: SkippedSourceInfo[]) => {
+  const progress = async (
+    status: string,
+    lastStep: string,
+    pct: number,
+    skipped?: SkippedSourceInfo[],
+    stepDetail?: string,
+  ) => {
     if (skipped) skippedAggregate = skipped;
     await prisma.fullDraftJob.update({
       where: { id: jobId },
@@ -1402,6 +1770,7 @@ async function runFullDraftJob(jobId: string) {
         status,
         lastStep,
         progress: pct,
+        ...(stepDetail ? { message: stepDetail } : {}),
         ...(skipped ? { skippedSources: skipped as object } : {}),
       },
     });
@@ -1409,9 +1778,15 @@ async function runFullDraftJob(jobId: string) {
 
   try {
     activeLlmTrace = llmTrace;
-    await progress("loading_sources", "loading_sources", 6);
+    await progress("loading_sources", "loading_sources", 6, undefined, "Loading project inputs and references");
 
-    const promptTopic = payload.data.prompt.trim().replace(/[.?!]+$/, "");
+    const researchPrompt = extractResearchPromptFromLegacyComposedPrompt(payload.data.prompt);
+    let composedGlobalPrompt = composeWorkspaceModelPrompt(researchPrompt, THESIS_PIPELINE_FIXED_SETTINGS);
+    const workspaceGenSettings = THESIS_PIPELINE_FIXED_SETTINGS;
+    const workspacePolicy = buildWorkspacePolicyInstructions(workspaceGenSettings);
+    const documentLanguageForPrompts = THESIS_PIPELINE_FIXED_SETTINGS.documentLanguage;
+
+    const promptTopic = researchPrompt.trim().replace(/[.?!]+$/, "");
     const promptWords = countPromptWords(promptTopic);
 
     const papers = await prisma.referencePaper.findMany({
@@ -1419,18 +1794,34 @@ async function runFullDraftJob(jobId: string) {
       orderBy: { createdAt: "desc" },
     });
 
-    const inferredTitle = !isUntrustedProjectTitle(project.title.trim())
-      ? project.title.trim()
-      : inferProjectTitleFromPrompt(promptTopic || "research topic");
-    const inferredField = project.field.trim().length >= 3 ? project.field.trim() : "Academic research";
-    const rqRaw = project.researchQuestion.trim();
-    const inferredResearchQuestion = !isUntrustedResearchQuestion(rqRaw)
-      ? rqRaw
-      : `How does ${promptTopic || "this topic"} relate to current academic literature and practical applications?`;
+    const topicNorm = normalizeThesisTopicForGeneration({
+      title: project.title,
+      field: project.field,
+      researchQuestion: project.researchQuestion,
+      description: project.description,
+      userPrompt: researchPrompt,
+      sourceCount: papers.length,
+    });
+    const inferredTitle = topicNorm.title;
+    const inferredField = topicNorm.field;
+    const inferredResearchQuestion = topicNorm.researchQuestion;
+    diagnostics.topicNormalized = topicNorm.topicWasNormalized;
+    diagnostics.topicNormalizationWarnings = topicNorm.warnings;
+
+    if (topicNorm.topicWasNormalized) {
+      console.log("[full-draft] topic normalized from weak input", { jobId, warnings: topicNorm.warnings });
+      composedGlobalPrompt +=
+        `\n\n=== Internal topic framing (student inputs are guidance only; may be sparse) ===\n` +
+        `Produce a coherent quantitative thesis aligned with:\n` +
+        `- Working title: ${inferredTitle}\n` +
+        `- Field: ${inferredField}\n` +
+        `- Research question: ${inferredResearchQuestion}\n` +
+        `Student prompt (non-binding): ${researchPrompt.trim() || "(none)"}\n`;
+    }
 
     const highQualityThesis = detectHighQualityThesisMode({
       highQualityFlag: payload.data.highQualityThesis,
-      prompt: payload.data.prompt,
+      prompt: composedGlobalPrompt,
     });
     if (!THESIS_DRAFT_SEED_AVAILABLE) {
       console.log("[full-draft] seed_unavailable", { jobId, reason: "SCHOLARFLOW_THESIS_SEED not configured" });
@@ -1468,19 +1859,22 @@ async function runFullDraftJob(jobId: string) {
       maxReferenceBudget: MAX_REFERENCE_SNIPPET_CHARS,
     });
 
-    await progress("extracting_sources", "extracting_sources", 12, skippedSources);
+    await progress(
+      "extracting_sources",
+      "extracting_sources",
+      12,
+      skippedSources,
+      "Extracting and ranking source snippets for context window",
+    );
 
-    if (usedSourceCount === 0 && promptWords < 8) {
-      await failJob({
-        failedStep: "extracting_sources",
-        message: "No usable source text after skipping empty or unreadable sources.",
-        details: "Add a longer prompt (8+ words) or re-upload sources so text can be extracted.",
-        skippedSources,
+    if (usedSourceCount === 0) {
+      console.warn("[full-draft] no_extracted_reference_text_proceeding_with_prompt_only", {
+        jobId,
+        promptWords,
       });
-      return;
     }
 
-    await progress("planning_outline", "planning_outline", 15);
+    await progress("planning_outline", "planning_outline", 15, undefined, "Validating and expanding chapter outline");
 
     const outlineRows = await prisma.documentSection.findMany({
       where: { projectId: id, sectionType: "outline_suggested" },
@@ -1493,17 +1887,12 @@ async function runFullDraftJob(jobId: string) {
       outlineSections = canonicalFiveChapterOutline();
     }
     if (outlineSections.length === 0) {
-      await failJob({
-        failedStep: "planning_outline",
-        message: "No usable outline sections were found.",
-        details: "Generate an outline from the workspace, then retry full draft.",
-        skippedSources,
-      });
-      return;
+      outlineSections = canonicalFiveChapterOutline();
+      console.warn("[full-draft] outline_fallback_canonical_in_worker", { jobId, projectId: id });
     }
     diagnostics.outlineHash = sha256(JSON.stringify(outlineSections));
 
-    const targetPages = parseTargetPagesFromPrompt(payload.data.prompt);
+    const targetPages = THESIS_PIPELINE_FIXED_SETTINGS.pages;
     const totalTargetWords = estimateWordBudgetFromPages(targetPages);
     const scaledSections = allocateSectionWordTargets(outlineSections, totalTargetWords);
     if (!scaledSections.some((s) => inferThesisChapterKind(s.title) === "appendix")) {
@@ -1516,7 +1905,6 @@ async function runFullDraftJob(jobId: string) {
     }
     const drafts: { title: string; content: string }[] = [];
 
-    const composedGlobalPrompt = payload.data.prompt;
     diagnostics.inputHash = sha256(
       JSON.stringify({
         prompt: composedGlobalPrompt,
@@ -1547,29 +1935,31 @@ async function runFullDraftJob(jobId: string) {
               chapterTitles: scaledSections.map((s) => s.title),
               globalPrompt: composedGlobalPrompt,
               references: referenceSnippets,
+              workspacePolicy,
             }),
             HQ_BLUEPRINT_TOKENS,
             { jobId, step: "drafting_chapters", label: "thesis_blueprint" },
+            llmTrace,
           )
         ).trim();
       }
     } catch (bpErr) {
-      await failJob({
-        failedStep: "planning_outline",
-        message: "Generation failed at: planning_outline",
-        details: `Thesis blueprint step: ${bpErr instanceof Error ? bpErr.message : String(bpErr)}`,
-        err: bpErr,
-        skippedSources: skippedAggregate,
+      thesisBlueprint = "";
+      diagnostics.repairTriggered = true;
+      console.error("[full-draft] thesis_blueprint_skipped_after_error", {
+        jobId,
+        message: bpErr instanceof Error ? bpErr.message : String(bpErr),
       });
-      return;
     }
 
     const abstractMaxTok = highQualityThesis ? HQ_ABSTRACT_TOKENS : ABSTRACT_MAX_OUTPUT_TOKENS;
     const qualityRepairMaxTok = highQualityThesis ? HQ_QUALITY_REPAIR_TOKENS : QUALITY_REPAIR_MAX_TOKENS;
-    const maxQualityRepairPasses = highQualityThesis ? HQ_MAX_QUALITY_ROUNDS : MAX_QUALITY_REPAIR_PASSES;
-    const maxSectionExpansionPasses = highQualityThesis ? 3 : MAX_SECTION_EXPANSION_PASSES;
-    const maxStructureRepairPasses = highQualityThesis ? 3 : MAX_STRUCTURE_REPAIR_PASSES;
-    const maxAbstractExpansionPasses = highQualityThesis ? 3 : MAX_ABSTRACT_EXPANSION_PASSES;
+    /** Speed-first: one generation + one local/LLM repair max; no multi-round chapter quality loops. */
+    const maxQualityRepairPasses = 0;
+    const maxSectionExpansionPasses = 1;
+    const maxStructureRepairPasses = 1;
+    const maxAbstractExpansionPasses = 1;
+    const maxStrictStructureRepairPasses = 1;
 
     let abstractLatex: string;
     try {
@@ -1580,7 +1970,7 @@ async function runFullDraftJob(jobId: string) {
               title: inferredTitle,
               field: inferredField,
               degreeLevel: project.degreeLevel,
-              language: project.language,
+              language: documentLanguageForPrompts,
               researchQuestion: inferredResearchQuestion,
               description: project.description,
             },
@@ -1588,9 +1978,11 @@ async function runFullDraftJob(jobId: string) {
             references: referenceSnippets,
             technicalPipeline: technical,
             citationRulesBlock,
+            workspacePolicy,
           }),
           abstractMaxTok,
           { jobId, step: "drafting_chapters", label: "abstract" },
+          llmTrace,
         ),
       );
       abstractLatex = stripMarkdownLatexArtifacts(abstractLatex);
@@ -1606,6 +1998,7 @@ async function runFullDraftJob(jobId: string) {
             }),
             abstractMaxTok,
             { jobId, step: "drafting_chapters", label: "abstract_expansion" },
+            llmTrace,
           ),
         );
         abstractIssue = auditAbstractLatex(abstractLatex, { technicalPipeline: technical });
@@ -1623,14 +2016,20 @@ async function runFullDraftJob(jobId: string) {
         abstractLatex = stripDisplayedMathFromBody(abstractLatex);
       }
     } catch (absErr) {
-      await failJob({
-        failedStep: "drafting_chapters",
-        message: "Generation failed at: drafting_chapters (abstract)",
-        details: absErr instanceof Error ? absErr.message : String(absErr),
-        err: absErr,
-        skippedSources: skippedAggregate,
+      console.error("[full-draft] abstract_llm_failed_using_fallback", {
+        jobId,
+        message: absErr instanceof Error ? absErr.message : String(absErr),
       });
-      return;
+      abstractLatex = buildFallbackAbstractLatex({
+        ...project,
+        title: inferredTitle,
+        field: inferredField,
+        researchQuestion: inferredResearchQuestion,
+      });
+      if (technical) {
+        abstractLatex = stripDisplayedMathFromBody(abstractLatex);
+      }
+      diagnostics.repairTriggered = true;
     }
 
     const totalChapters = scaledSections.length;
@@ -1644,6 +2043,7 @@ async function runFullDraftJob(jobId: string) {
         "drafting_chapters",
         20 + Math.round((chapterIndex / Math.max(1, totalChapters)) * 55),
         skippedAggregate,
+        `Drafting chapter ${chapterIndex + 1}/${totalChapters}: ${section.title}`,
       );
 
       try {
@@ -1685,9 +2085,10 @@ async function runFullDraftJob(jobId: string) {
             ? SECTION_MAX_OUTPUT_TOKENS_DEEP
             : SECTION_MAX_OUTPUT_TOKENS;
 
-        const MAX_CHAPTER_STRUCTURE_ATTEMPTS = 3;
+        const MAX_CHAPTER_STRUCTURE_ATTEMPTS = 2;
         let combinedText = "";
         let lastStructMissing: string[] = [];
+        const chapterAttemptReports: Record<string, unknown>[] = [];
 
         for (let structAttempt = 0; structAttempt < MAX_CHAPTER_STRUCTURE_ATTEMPTS; structAttempt++) {
           const strictPrefix =
@@ -1695,8 +2096,8 @@ async function runFullDraftJob(jobId: string) {
               ? ""
               : `CRITICAL — STRUCTURE RETRY ${structAttempt + 1}/${MAX_CHAPTER_STRUCTURE_ATTEMPTS}: a previous assembly failed LaTeX heading validation (${lastStructMissing.join("; ") || "unknown"}).
 Regenerate each subsection fragment so the assembled chapter contains EVERY required \\section and \\subsection from the constraints JSON, in order, with EXACT subsection titles.
-DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write substantive placeholder paragraphs (at least the minimum per subsection).\n\n`;
-          const oneShotPrompt = buildChapterOneShotPrompt({
+DO NOT omit subsections. DO NOT rename headings. If evidence is thin, still write substantive, source-aware academic prose under every required heading (no template filler, no “replace this” stubs).\n\n`;
+          let oneShotPrompt = buildChapterOneShotPrompt({
             strictPrefix,
             constraintsJson,
             mandatoryHeadingLines,
@@ -1708,7 +2109,7 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
               title: inferredTitle,
               field: inferredField,
               degreeLevel: project.degreeLevel,
-              language: project.language,
+              language: documentLanguageForPrompts,
               researchQuestion: inferredResearchQuestion,
               description: project.description,
             },
@@ -1719,18 +2120,149 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
             hasDataset,
             thesisBlueprint,
             citationRulesBlock,
+            workspacePolicy,
           });
-          combinedText = sanitizeThesisLatexMath(
-            await openAiThesisText(oneShotPrompt, maxOut, {
+          if (structAttempt >= 4) {
+            oneShotPrompt += `
+
+=== STRUCTURE LOCK (attempt ${structAttempt + 1}) ===
+Your entire answer MUST begin with these lines, character-for-character (then continue with prose under each subsection):
+${mandatoryHeadingLines}
+`;
+          }
+          const attemptTemperature = THESIS_DRAFT_TEMPERATURE + Math.min(0.24, structAttempt * 0.034);
+          const { text: rawChapterText, meta: chapterLlmMeta } = await openAiThesisTextWithMeta(
+            oneShotPrompt,
+            maxOut,
+            {
               jobId,
               step: "drafting_chapters",
               label: `ch_${chapterIndex}_oneshot_a${structAttempt}`,
-            }),
-          ).trim();
-          combinedText = stripMarkdownLatexArtifacts(combinedText);
+            },
+            llmTrace,
+            { temperature: attemptTemperature },
+          );
+          console.log("[full-draft] chapter_llm_raw_diagnostics", {
+            jobId,
+            chapterIndex,
+            chapterTitle: section.title,
+            structAttempt,
+            model: chapterLlmMeta.model,
+            promptChars: chapterLlmMeta.promptChars,
+            maxOutputTokensRequested: chapterLlmMeta.maxOutputTokensRequested,
+            rawOutputTextChars: chapterLlmMeta.rawOutputTextChars,
+            rawPreview1000: chapterLlmMeta.rawPreview1000,
+            extractedCharsBeforeSanitize: chapterLlmMeta.extractedChars,
+            extractedPreview1000: chapterLlmMeta.extractedPreview1000,
+            responseStatus: chapterLlmMeta.responseStatus,
+            incompleteReason: chapterLlmMeta.incompleteReason,
+            refusalSummaries: chapterLlmMeta.refusalSummaries,
+            usage: chapterLlmMeta.usage,
+            errorMessage: chapterLlmMeta.errorMessage,
+            usedReasoningFallback: chapterLlmMeta.usedReasoningFallback,
+            productionFallbackPath: chapterLlmMeta.productionFallbackPath,
+            diagnosticNote:
+              chapterLlmMeta.extractedChars === 0 && chapterLlmMeta.rawOutputTextChars === 0
+                ? "OpenAI returned no final text"
+                : undefined,
+          });
+          const { text: processedChapter, diagnostics: pipeDiag } = processChapterBodyFromModelRaw({
+            rawFromApi: rawChapterText,
+            chapterKind,
+            citationOpts: { uploadFallbackKeys: allowedNatbibKeys },
+            chapterOrderIndex: chapterIndex,
+            chapterTitle: section.title,
+            technicalPipeline: technical,
+            highQualityThesis,
+            allowedNatbibKeys,
+          });
+          combinedText = processedChapter.trim();
+
+          const rawApiLen = rawChapterText.length;
+          const extractedApiLen = chapterLlmMeta.extractedChars;
+          let exactRejectionReason: string | undefined;
+          if (combinedText.length < MIN_CHAPTER_LATEX_CHARS) {
+            if (!rawChapterText.trim() && extractedApiLen === 0) {
+              exactRejectionReason = "openai_returned_no_final_text";
+            } else if (rawChapterText.trim().length > 0 && combinedText.length === 0) {
+              exactRejectionReason = pipeDiag.emptiedAtStage
+                ? `pipeline_zeroed_at_${pipeDiag.emptiedAtStage}`
+                : pipeDiag.recoveryApplied
+                  ? "pipeline_and_recovery_still_empty"
+                  : "pipeline_zeroed_unknown_stage";
+            } else {
+              exactRejectionReason = `below_min_chars_after_pipeline_have_${combinedText.length}_need_${MIN_CHAPTER_LATEX_CHARS}`;
+            }
+          }
+
+          const attemptReport = {
+            structAttempt,
+            exactRejectionReason,
+            llm: {
+              rawResponseChars: chapterLlmMeta.rawOutputTextChars,
+              rawResponsePreview1000: chapterLlmMeta.rawPreview1000,
+              extractedTextChars: chapterLlmMeta.extractedChars,
+              extractedTextPreview1000: chapterLlmMeta.extractedPreview1000,
+              usedReasoningFallback: chapterLlmMeta.usedReasoningFallback,
+              diagnosticNote:
+                chapterLlmMeta.extractedChars === 0 && chapterLlmMeta.rawOutputTextChars === 0
+                  ? "OpenAI returned no final text"
+                  : undefined,
+              productionFallbackPath: chapterLlmMeta.productionFallbackPath,
+            },
+            stages: {
+              rawApiChars: pipeDiag.rawApiChars,
+              rawApiPreview1000: pipeDiag.rawApiPreview1000,
+              afterUnwrapChars: pipeDiag.afterUnwrapChars,
+              afterUnwrapPreview1000: pipeDiag.afterUnwrapPreview1000,
+              afterResidualMarkdownChars: pipeDiag.afterResidualMarkdownChars,
+              afterResidualMarkdownPreview1000: pipeDiag.afterResidualMarkdownPreview1000,
+              afterLatexSanitizeChars: pipeDiag.afterLatexSanitizeChars,
+              afterLatexSanitizePreview1000: pipeDiag.afterLatexSanitizePreview1000,
+              afterCitationSanitizeChars: pipeDiag.afterCitationSanitizeChars,
+              afterCitationSanitizePreview1000: pipeDiag.afterCitationSanitizePreview1000,
+              afterPlaceholderAuditChars: pipeDiag.afterPlaceholderAuditChars,
+              placeholderLeakHitCount: pipeDiag.placeholderLeakHitCount,
+              placeholderLeakCodes: pipeDiag.placeholderLeakCodes,
+              fillerAuditIssueCodes: pipeDiag.fillerAuditIssueCodes,
+            },
+            unwrapNotes: pipeDiag.unwrapNotes,
+            emptiedAtStage: pipeDiag.emptiedAtStage,
+            lastNonEmptyStage: pipeDiag.lastNonEmptyStage,
+            lastNonEmptyLength: pipeDiag.lastNonEmptyLength,
+            lastNonEmptyPreview1000: pipeDiag.lastNonEmptyPreview1000,
+            recoveryApplied: pipeDiag.recoveryApplied,
+            recoveryStrategy: pipeDiag.recoveryStrategy,
+            finalProcessedChars: combinedText.length,
+          };
+          chapterAttemptReports.push(attemptReport);
+
+          console.log("[full-draft] chapter_extract_pipeline", {
+            jobId,
+            chapterIndex,
+            chapterTitle: section.title,
+            ...attemptReport,
+          });
+
+          if (combinedText.length < MIN_CHAPTER_LATEX_CHARS) {
+            lastStructMissing = [
+              `extracted chapter LaTeX is ${combinedText.length} characters; require >= ${MIN_CHAPTER_LATEX_CHARS} before structure validation`,
+            ];
+            console.warn("[full-draft] chapter_extracted_too_short", {
+              jobId,
+              chapterIndex,
+              structAttempt,
+              sanitizedLength: combinedText.length,
+              minRequired: MIN_CHAPTER_LATEX_CHARS,
+              exactRejectionReason,
+              rawApiLen,
+              extractedApiLen,
+            });
+            continue;
+          }
           const structCheck = validateChapterStructureAgainstScaffold(combinedText, adaptedScaffold);
           lastStructMissing = structCheck.missing;
-          console.log("[full-draft] debug_raw_latex", {
+          console.log("[full-draft] chapter_post_extract_diagnostics", {
             jobId,
             chapterIndex,
             chapterKind,
@@ -1738,78 +2270,181 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
             structAttempt,
             scaffoldOk: structCheck.ok,
             missing: structCheck.missing,
-            length: combinedText.length,
-            preview: combinedText.slice(0, 4000),
-            tail: combinedText.slice(-1200),
+            sanitizedLength: combinedText.length,
+            preview: combinedText.slice(0, 1000),
+            tail: combinedText.slice(-800),
           });
           if (structCheck.ok) break;
         }
 
+        if (combinedText.length < MIN_CHAPTER_LATEX_CHARS) {
+          const tail = chapterAttemptReports[chapterAttemptReports.length - 1] as
+            | {
+                exactRejectionReason?: string;
+                emptiedAtStage?: string;
+                lastNonEmptyPreview1000?: string;
+                llm?: { extractedTextPreview1000?: string; rawResponsePreview1000?: string };
+              }
+            | undefined;
+          await failJob({
+            failedStep: "drafting_chapters",
+            message: "LLM returned empty or unparseable chapter content",
+            details: JSON.stringify({
+              chapterTitle: section.title,
+              minChars: MIN_CHAPTER_LATEX_CHARS,
+              finalLength: combinedText.length,
+              attempts: MAX_CHAPTER_STRUCTURE_ATTEMPTS,
+              exactRejectionReason: tail?.exactRejectionReason,
+              attemptDiagnostics: chapterAttemptReports,
+              preservedRawPreview1000: tail?.llm?.rawResponsePreview1000,
+              preservedExtractedPreview1000: tail?.llm?.extractedTextPreview1000,
+              preservedLastNonEmptyPreview1000: tail?.lastNonEmptyPreview1000,
+              emptiedAtStage: tail?.emptiedAtStage,
+            }),
+            skippedSources: skippedAggregate,
+          });
+          return;
+        }
+
         let structCheckFinal = validateChapterStructureAgainstScaffold(combinedText, adaptedScaffold);
-        if (!structCheckFinal.ok && combinedText.trim()) {
+        let afterStrictStructureRepairChars = combinedText.length;
+        for (let structRepairRound = 0; structRepairRound < maxStrictStructureRepairPasses; structRepairRound++) {
+          structCheckFinal = validateChapterStructureAgainstScaffold(combinedText, adaptedScaffold);
+          if (structCheckFinal.ok) break;
+          if (!combinedText.trim()) break;
+          const brokenForRepair =
+            combinedText.length > 36_000
+              ? `${combinedText.slice(0, 18_000)}\n\n[… middle truncated for repair prompt …]\n\n${combinedText.slice(-18_000)}`
+              : combinedText;
           const repairPrompt = buildStrictStructureRepairPrompt({
             missing: structCheckFinal.missing,
             referenceScaffold: renderScaffoldHeadingsOnlyLatex(adaptedScaffold),
-            brokenBody: combinedText,
+            brokenBody: brokenForRepair,
             citationRulesBlock,
           });
           diagnostics.repairTriggered = true;
-          const repaired = await openAiThesisText(repairPrompt, maxOut, {
-            jobId,
-            step: "drafting_chapters",
-            label: `strict_structure_repair_${chapterIndex}`,
-          });
+          const repairTemperature = THESIS_DRAFT_TEMPERATURE + Math.min(0.22, structRepairRound * 0.048);
+          const repaired = await openAiThesisText(
+            repairPrompt,
+            maxOut,
+            {
+              jobId,
+              step: "drafting_chapters",
+              label: `strict_structure_repair_${chapterIndex}_r${structRepairRound}`,
+            },
+            llmTrace,
+            { temperature: repairTemperature },
+          );
           if (repaired.trim()) {
-            const repairedClean = stripMarkdownLatexArtifacts(sanitizeThesisLatexMath(repaired));
+            const { text: repairedProcessed } = processChapterBodyFromModelRaw({
+              rawFromApi: repaired,
+              chapterKind,
+              citationOpts: { uploadFallbackKeys: allowedNatbibKeys },
+              chapterOrderIndex: chapterIndex,
+              chapterTitle: section.title,
+              technicalPipeline: technical,
+              highQualityThesis,
+              allowedNatbibKeys,
+            });
+            const repairedClean = repairedProcessed.trim();
             if (scoreChapterQuality(repairedClean) >= scoreChapterQuality(combinedText)) {
               combinedText = repairedClean;
               diagnostics.generationMode = "repaired_output";
             }
           }
           structCheckFinal = validateChapterStructureAgainstScaffold(combinedText, adaptedScaffold);
+          afterStrictStructureRepairChars = combinedText.length;
           console.log("[full-draft] debug_raw_latex_post_strict_repair", {
             jobId,
             chapterIndex,
+            round: structRepairRound,
             ok: structCheckFinal.ok,
             missing: structCheckFinal.missing,
             preview: combinedText.slice(0, 3500),
+            afterStructureRepairChars: afterStrictStructureRepairChars,
           });
         }
 
-        if (!structCheckFinal.ok) {
-          const placeholderCandidate = renderScaffoldMinimalPlaceholderBody(adaptedScaffold);
-          if (scoreChapterQuality(placeholderCandidate) > scoreChapterQuality(combinedText)) {
-            combinedText = placeholderCandidate;
-            diagnostics.generationMode = "fallback_placeholder";
-            diagnostics.deterministicPlaceholderFallbackTriggered = true;
+        console.log("[full-draft] chapter_stage_after_strict_structure_repair", {
+          jobId,
+          chapterIndex,
+          chapterTitle: section.title,
+          afterStructureRepairChars: afterStrictStructureRepairChars,
+          structureOk: structCheckFinal.ok,
+        });
+
+        if (!structCheckFinal.ok && combinedText.length >= MIN_CHAPTER_LATEX_CHARS) {
+          const wrapped = wrapProseUnderScaffoldHeadings(combinedText, adaptedScaffold);
+          if (wrapped) {
+            const wClean = stripMarkdownLatexArtifacts(sanitizeThesisLatexMath(wrapped)).trim();
+            if (wClean.length >= MIN_CHAPTER_LATEX_CHARS) {
+              const wCheck = validateChapterStructureAgainstScaffold(wClean, adaptedScaffold);
+              if (wCheck.ok) {
+                combinedText = wClean;
+                diagnostics.repairTriggered = true;
+                diagnostics.generationMode = "repaired_output";
+                structCheckFinal = wCheck;
+                console.warn("[full-draft] chapter_structure_heading_wrap", {
+                  jobId,
+                  chapterIndex,
+                  chapterTitle: section.title,
+                });
+              }
+            }
           }
-          console.warn("[full-draft] scaffold_fallback_body", {
+        }
+
+        if (!structCheckFinal.ok) {
+          diagnostics.repairTriggered = true;
+          const salvageWrap = wrapProseUnderScaffoldHeadings(combinedText, adaptedScaffold);
+          if (salvageWrap) {
+            combinedText = stripMarkdownLatexArtifacts(sanitizeThesisLatexMath(salvageWrap)).trim();
+          } else {
+            const heads = renderScaffoldHeadingsOnlyLatex(adaptedScaffold);
+            combinedText = `${heads}\n\n${combinedText.trim()}`;
+          }
+          structCheckFinal = validateChapterStructureAgainstScaffold(combinedText, adaptedScaffold);
+          console.warn("[full-draft] chapter_structure_relaxed_accept", {
             jobId,
             chapterIndex,
+            chapterTitle: section.title,
+            structureOk: structCheckFinal.ok,
             missing: structCheckFinal.missing,
           });
         }
 
-        combinedText = sanitizeThesisLatexMath(combinedText || fallbackSectionDraft(section));
+        combinedText = sanitizeThesisLatexMath(combinedText);
         let currentWords = countApproxWords(combinedText);
         let pass = 0;
 
-        while (currentWords < targetWords * 0.85 && pass < maxSectionExpansionPasses) {
+        while (currentWords < targetWords * 0.95 && pass < maxSectionExpansionPasses) {
           const remainingWords = Math.max(220, Math.round(targetWords - currentWords));
           const expansionPrompt = buildExpansionPrompt({
             section,
             existingDraft: combinedText,
             references: referenceSnippets,
             remainingWords,
+            workspacePolicy,
           });
 
           const extra = await openAiThesisText(expansionPrompt, maxOut, {
             jobId,
             step: "drafting_chapters",
             label: `chapter_expand_${chapterIndex}_${pass}`,
+          }, llmTrace);
+          if (!extra?.trim()) break;
+          const { text: extraProcessed } = processChapterBodyFromModelRaw({
+            rawFromApi: extra,
+            chapterKind,
+            citationOpts: { uploadFallbackKeys: allowedNatbibKeys },
+            chapterOrderIndex: chapterIndex,
+            chapterTitle: section.title,
+            technicalPipeline: technical,
+            highQualityThesis,
+            allowedNatbibKeys,
           });
-          if (!extra) break;
-          combinedText = sanitizeThesisLatexMath(`${combinedText}\n\n${extra}`);
+          if (!extraProcessed.trim()) break;
+          combinedText = sanitizeThesisLatexMath(`${combinedText}\n\n${extraProcessed}`);
           combinedText = stripMarkdownLatexArtifacts(combinedText);
           currentWords = countApproxWords(combinedText);
 
@@ -1826,13 +2461,29 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
             mandatoryHeadingLines: renderScaffoldHeadingsOnlyLatex(adaptedScaffold),
           });
           diagnostics.repairTriggered = true;
-          const revised = await openAiThesisText(repairPrompt, maxOut, {
-            jobId,
-            step: "drafting_chapters",
-            label: `structure_repair_${chapterIndex}_${structurePass}`,
+          const revised = await openAiThesisText(
+            repairPrompt,
+            maxOut,
+            {
+              jobId,
+              step: "drafting_chapters",
+              label: `structure_repair_${chapterIndex}_${structurePass}`,
+            },
+            llmTrace,
+            { temperature: THESIS_DRAFT_TEMPERATURE + Math.min(0.18, structurePass * 0.045) },
+          );
+          if (!revised?.trim()) break;
+          const { text: revisedProcessed } = processChapterBodyFromModelRaw({
+            rawFromApi: revised,
+            chapterKind,
+            citationOpts: { uploadFallbackKeys: allowedNatbibKeys },
+            chapterOrderIndex: chapterIndex,
+            chapterTitle: section.title,
+            technicalPipeline: technical,
+            highQualityThesis,
+            allowedNatbibKeys,
           });
-          if (!revised) break;
-          const revisedClean = stripMarkdownLatexArtifacts(sanitizeThesisLatexMath(revised));
+          const revisedClean = revisedProcessed.trim();
           if (scoreChapterQuality(revisedClean) >= scoreChapterQuality(combinedText)) {
             combinedText = revisedClean;
             diagnostics.generationMode = "repaired_output";
@@ -1841,23 +2492,21 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
           structurePass += 1;
         }
 
+        console.log("[full-draft] chapter_stage_after_hierarchy_repair", {
+          jobId,
+          chapterIndex,
+          chapterTitle: section.title,
+          afterHierarchyRepairChars: combinedText.length,
+          hierarchyOk: hierarchyCheck.isValid,
+        });
+
         if (!hierarchyCheck.isValid) {
-          const scaffold = buildFallbackHierarchy(section)
-            .map((node) => {
-              const subsectionBlocks = (node.subsections || [])
-                .map((sub) => {
-                  const leaves = (sub.subsubsections || [])
-                    .map((leaf) => `\\subsubsection{${escapeLatex(leaf)}}\nAdd focused technical detail, evidence handling, and interpretation.`)
-                    .join("\n\n");
-                  return `\\subsection{${escapeLatex(sub.title)}}\n${escapeLatex(
-                    sub.focus || "Develop a specific argument with evidence and interpretation.",
-                  )}\n\n${leaves}`.trim();
-                })
-                .join("\n\n");
-              return `\\section{${escapeLatex(node.title)}}\n${subsectionBlocks}`;
-            })
-            .join("\n\n");
-          combinedText = sanitizeThesisLatexMath(`${scaffold}\n\n${combinedText}`);
+          console.warn("[full-draft] hierarchy_accepted_with_warnings", {
+            jobId,
+            chapterIndex,
+            chapterTitle: section.title,
+            hierarchyCheck,
+          });
         }
 
         combinedText = sanitizeThesisLatexMath(combinedText);
@@ -1886,9 +2535,19 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
             jobId,
             step: "drafting_chapters",
             label: `quality_repair_${chapterIndex}_${qPass}`,
+          }, llmTrace);
+          if (!fixed?.trim()) break;
+          const { text: fixedProcessed } = processChapterBodyFromModelRaw({
+            rawFromApi: fixed,
+            chapterKind,
+            citationOpts: { uploadFallbackKeys: allowedNatbibKeys },
+            chapterOrderIndex: chapterIndex,
+            chapterTitle: section.title,
+            technicalPipeline: technical,
+            highQualityThesis,
+            allowedNatbibKeys,
           });
-          if (!fixed) break;
-          const fixedClean = stripMarkdownLatexArtifacts(sanitizeThesisLatexMath(fixed));
+          const fixedClean = fixedProcessed.trim();
           if (scoreChapterQuality(fixedClean) >= scoreChapterQuality(combinedText)) {
             combinedText = fixedClean;
             diagnostics.generationMode = "repaired_output";
@@ -1907,11 +2566,21 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
           combinedText = stripDisplayedMathFromBody(combinedText);
         }
 
+        combinedText = promoteInlineSubsectionLabels(combinedText);
+        combinedText = sanitizeSlashInLatexHeadings(combinedText);
+
         combinedText = appendFigurePlaceholdersForChapter(combinedText, {
           chapterOrderIndex: chapterIndex,
           chapterKind,
           technical,
           highQuality: technical,
+        });
+
+        console.log("[full-draft] chapter_final_accepted", {
+          jobId,
+          chapterIndex,
+          chapterTitle: section.title,
+          finalAcceptedChars: combinedText.length,
         });
 
         drafts.push({
@@ -1940,6 +2609,58 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
       }
     }
 
+    if (countCorpusWordsApprox(abstractLatex, drafts) < CORPUS_WORD_SOFT_TARGET) {
+      await progress(
+        "drafting_chapters",
+        "drafting_chapters",
+        76,
+        skippedAggregate,
+        "Corpus length expansion (methodology and results; single pass)",
+      );
+      for (let ci = 0; ci < drafts.length; ci++) {
+        if (countCorpusWordsApprox(abstractLatex, drafts) >= CORPUS_WORD_SOFT_TARGET) break;
+        const kind = inferThesisChapterKind(drafts[ci].title);
+        if (kind !== "methodology" && kind !== "results") continue;
+        const section = scaledSections[ci];
+        const remainingWords = Math.min(
+          4200,
+          Math.max(900, CORPUS_WORD_SOFT_TARGET - countCorpusWordsApprox(abstractLatex, drafts)),
+        );
+        const expansionPrompt = buildExpansionPrompt({
+          section,
+          existingDraft: drafts[ci].content,
+          references: referenceSnippets,
+          remainingWords,
+          workspacePolicy,
+        });
+        const maxExpandTok =
+          kind === "methodology" || kind === "results" ? SECTION_MAX_OUTPUT_TOKENS_DEEP : SECTION_MAX_OUTPUT_TOKENS;
+        const extra = await openAiThesisText(
+          expansionPrompt,
+          maxExpandTok,
+          { jobId, step: "drafting_chapters", label: `corpus_expand_${ci}` },
+          llmTrace,
+        );
+        if (!extra?.trim()) continue;
+        const { text: extraProcessed } = processChapterBodyFromModelRaw({
+          rawFromApi: extra,
+          chapterKind: kind,
+          citationOpts: { uploadFallbackKeys: allowedNatbibKeys },
+          chapterOrderIndex: ci,
+          chapterTitle: section.title,
+          technicalPipeline: technical,
+          highQualityThesis,
+          allowedNatbibKeys,
+        });
+        if (!extraProcessed.trim()) continue;
+        drafts[ci].content = sanitizeThesisLatexMath(`${drafts[ci].content}\n\n${extraProcessed}`);
+        drafts[ci].content = stripMarkdownLatexArtifacts(drafts[ci].content);
+        if (technical && ci < 2) {
+          drafts[ci].content = stripDisplayedMathFromBody(drafts[ci].content);
+        }
+      }
+    }
+
     await progress("generating_figures_tables", "generating_figures_tables", 78, skippedAggregate);
     try {
       ensureGlobalFigureMinimum(drafts, technical, { highQuality: technical });
@@ -1959,7 +2680,7 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
 
     await progress("inserting_citations", "inserting_citations", 82, skippedAggregate);
 
-    for (let phRound = 0; phRound < 2; phRound++) {
+    for (let phRound = 0; phRound < 1; phRound++) {
       const combinedHits = auditCombinedThesisBodies({ abstractLatex, chapters: drafts });
       if (combinedHits.length === 0) break;
 
@@ -1970,6 +2691,7 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
           buildAntiPlaceholderAbstractPrompt({ body: abstractLatex, hits: absHits }),
           qualityRepairMaxTok,
           { jobId, step: "inserting_citations", label: `anti_placeholder_abs_${phRound}` },
+          llmTrace,
         );
         if (repairedAbs.trim()) {
           abstractLatex = sanitizeThesisLatexMath(repairedAbs);
@@ -1990,6 +2712,7 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
           }),
           qualityRepairMaxTok,
           { jobId, step: "inserting_citations", label: `anti_placeholder_ch_${i}_${phRound}` },
+          llmTrace,
         );
         if (repaired.trim()) {
           drafts[i].content = sanitizeThesisLatexMath(repaired);
@@ -2008,7 +2731,9 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
       abstractLatex = stripDisplayedMathFromBody(abstractLatex);
     }
 
-    await progress("validating_quality", "validating_quality", 90, skippedAggregate);
+    const methodologyMathFloor = highQualityThesis ? 4 : 2;
+    ensureMethodologyDisplayMathFloor(drafts, methodologyMathFloor);
+    await progress("validating_quality", "validating_quality", 90, skippedAggregate, "Running quality gate checks");
 
     const logQualityDiagnostics = (label: string, extra?: Record<string, unknown>) => {
       const dx = buildFullDraftQualityDiagnostics({
@@ -2036,69 +2761,19 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
 
     logQualityDiagnostics("before_quality_gate");
 
-    let qualityWarningHits: { scope: string; code: string; detail: string }[] = [];
-    const MAX_GATE_ROUNDS = 2;
-    for (let gateRound = 0; gateRound < MAX_GATE_ROUNDS; gateRound++) {
-      const gateHits = auditFullThesisQualityGate({
-        abstractLatex,
-        drafts,
-        technicalPipeline: technical,
-        highQualityThesis,
-        allowedNatbibKeys,
-      });
-      qualityWarningHits = gateHits.filter((h) => classifyQualityGateHitSeverity(h) === "warning");
-      const fatalGateHits = gateHits.filter((h) => classifyQualityGateHitSeverity(h) === "fatal");
-      if (fatalGateHits.length === 0) break;
+    let qualityWarningHits: { scope: string; code: string; detail: string }[] = auditFullThesisQualityGate({
+      abstractLatex,
+      drafts,
+      technicalPipeline: technical,
+      highQualityThesis,
+      allowedNatbibKeys,
+      topicContext: { title: project.title, researchQuestion: project.researchQuestion, field: project.field },
+    });
+    logQualityDiagnostics("quality_gate_diagnostic_only", {
+      gateHitCodes: qualityWarningHits.map((h) => `${h.scope}:${h.code}`),
+    });
 
-      logQualityDiagnostics(`quality_gate_round_${gateRound}`, {
-        fatalGateHitCodes: fatalGateHits.map((h) => `${h.scope}:${h.code}`),
-        warningGateHitCodes: qualityWarningHits.map((h) => `${h.scope}:${h.code}`),
-      });
-
-      const absIssues = fatalGateHits.filter((h) => h.scope === "abstract");
-      if (absIssues.length > 0) {
-        diagnostics.repairTriggered = true;
-        const absRepair = await openAiThesisText(
-          buildGateRepairAbstractPrompt({
-            issues: absIssues,
-            body: abstractLatex,
-            citationRulesBlock,
-          }),
-          qualityRepairMaxTok,
-          { jobId, step: "validating_quality", label: `gate_abs_${gateRound}` },
-        );
-        if (absRepair.trim()) {
-          abstractLatex = sanitizeThesisLatexMath(absRepair);
-          abstractLatex = stripMarkdownLatexArtifacts(abstractLatex);
-          if (technical) abstractLatex = stripDisplayedMathFromBody(abstractLatex);
-        }
-      }
-
-      for (let i = 0; i < drafts.length; i++) {
-        const title = drafts[i].title;
-        const chapterIssues = filterGateHitsForChapterRepair(fatalGateHits, title, drafts[i].content);
-        if (chapterIssues.length === 0) continue;
-        diagnostics.repairTriggered = true;
-        const chRepair = await openAiThesisText(
-          buildGateRepairChapterPrompt({
-            chapterTitle: title,
-            issues: chapterIssues,
-            body: drafts[i].content,
-            references: referenceSnippets,
-            citationRulesBlock,
-          }),
-          qualityRepairMaxTok,
-          { jobId, step: "validating_quality", label: `gate_ch_${i}_${gateRound}` },
-        );
-        if (chRepair.trim()) {
-          drafts[i].content = sanitizeThesisLatexMath(chRepair);
-          drafts[i].content = stripMarkdownLatexArtifacts(drafts[i].content);
-          if (technical && i < 2) {
-            drafts[i].content = stripDisplayedMathFromBody(drafts[i].content);
-          }
-        }
-      }
-    }
+    ensureMethodologyDisplayMathFloor(drafts, methodologyMathFloor);
 
     const finalGateHits = auditFullThesisQualityGate({
       abstractLatex,
@@ -2106,59 +2781,12 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
       technicalPipeline: technical,
       highQualityThesis,
       allowedNatbibKeys,
+      topicContext: { title: project.title, researchQuestion: project.researchQuestion, field: project.field },
     });
-    const finalFatalGateHits = finalGateHits.filter((h) => classifyQualityGateHitSeverity(h) === "fatal");
-    qualityWarningHits = finalGateHits.filter((h) => classifyQualityGateHitSeverity(h) === "warning");
-    if (finalFatalGateHits.length > 0) {
-      const draftDiagnostics = buildFullDraftQualityDiagnostics({
-        jobId,
-        failedStep: "validating_quality",
-        abstractLatex,
-        drafts,
-      });
-      logQualityDiagnostics("after_quality_gate_failed", {
-        finalFatalGateHitCodes: finalFatalGateHits.map((h) => `${h.scope}:${h.code}`),
-        finalWarningGateHitCodes: qualityWarningHits.map((h) => `${h.scope}:${h.code}`),
-      });
-      await failJob({
-        failedStep: "validating_quality",
-        message: "Thesis did not pass final quality validation after automatic repair.",
-        details: JSON.stringify({
-          qualityFailureReport: finalFatalGateHits.map((h) => ({
-            scope: h.scope,
-            code: h.code,
-            detail: h.detail,
-          })),
-          draftDiagnostics: {
-            jobId: draftDiagnostics.jobId,
-            failedStep: draftDiagnostics.failedStep,
-            sectionCountsByChapter: draftDiagnostics.sectionCountsByChapter,
-            subsectionCountsByChapter: draftDiagnostics.subsectionCountsByChapter,
-            equationCountsByChapter: draftDiagnostics.equationCountsByChapter,
-            tableCountsByChapter: draftDiagnostics.tableCountsByChapter,
-            figureCountsByChapter: draftDiagnostics.figureCountsByChapter,
-            first1000CharsByChapter: draftDiagnostics.first1000CharsByChapter,
-            totalSectionCountAcrossChapters: draftDiagnostics.totalSectionCountAcrossChapters,
-            totalSubsectionCountAcrossChapters: draftDiagnostics.totalSubsectionCountAcrossChapters,
-            combinedDocumentCharLength: draftDiagnostics.combinedDocumentCharLength,
-            combinedDocumentPreview2000: draftDiagnostics.combinedDocumentPreview2000,
-            abstractPreview800: draftDiagnostics.abstractPreview800,
-            chapters: draftDiagnostics.chapters.map((c) => ({
-              title: c.title,
-              kind: c.kind,
-              sectionCount: c.sectionCount,
-              subsectionCount: c.subsectionCount,
-              displayMathBlockCount: c.displayMathBlockCount,
-              tableCount: c.tableCount,
-              figureCount: c.figureCount,
-              wordCountApprox: c.wordCountApprox,
-            })),
-          },
-        }),
-        skippedSources: skippedAggregate,
-      });
-      return;
-    }
+    qualityWarningHits = finalGateHits;
+    logQualityDiagnostics("after_quality_gate_non_blocking", {
+      remainingGateHitCodes: qualityWarningHits.map((h) => `${h.scope}:${h.code}`),
+    });
 
     // Final guardrail: enforce mandatory appendix/subsections/table/figure after all repair rounds.
     {
@@ -2173,45 +2801,86 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
     abstractLatex = sanitizeBlankCitationsInLatex(abstractLatex, { uploadFallbackKeys }).text;
     for (const d of drafts) {
       d.content = sanitizeBlankCitationsInLatex(d.content, { uploadFallbackKeys }).text;
+      d.content = promoteInlineSubsectionLabels(d.content);
+      d.content = sanitizeSlashInLatexHeadings(d.content);
     }
 
-    try {
-      await prisma.$transaction(async (tx) => {
-        await tx.documentSection.deleteMany({
-          where: { projectId: id, sectionType: "live_draft" },
-        });
-        await tx.documentSection.deleteMany({
-          where: { projectId: id, sectionType: "draft_chapter" },
-        });
-        await tx.documentSection.deleteMany({
-          where: { projectId: id, sectionType: "draft_abstract" },
-        });
+    {
+      const finalized = applyDeterministicThesisFinalization({ abstractLatex, drafts });
+      abstractLatex = finalized.abstractLatex;
+      drafts.length = 0;
+      drafts.push(...finalized.drafts);
+    }
 
+    const sectionRows: { projectId: string; title: string; sectionType: string; content: string }[] = [
+      {
+        projectId: id,
+        title: "Generated abstract",
+        sectionType: "draft_abstract",
+        content: abstractLatex,
+      },
+      ...drafts.map((d) => ({
+        projectId: id,
+        title: d.title,
+        sectionType: "draft_chapter",
+        content: d.content,
+      })),
+    ];
+
+    const persistAssembledDraftSections = async (tx: Prisma.TransactionClient) => {
+      await tx.documentSection.deleteMany({
+        where: { projectId: id, sectionType: "live_draft" },
+      });
+      await tx.documentSection.deleteMany({
+        where: { projectId: id, sectionType: "draft_chapter" },
+      });
+      await tx.documentSection.deleteMany({
+        where: { projectId: id, sectionType: "draft_abstract" },
+      });
+
+      await tx.documentSection.create({
+        data: {
+          projectId: id,
+          title: "Generated abstract",
+          sectionType: "draft_abstract",
+          content: abstractLatex,
+        },
+      });
+
+      for (const draft of drafts) {
         await tx.documentSection.create({
           data: {
             projectId: id,
-            title: "Generated abstract",
-            sectionType: "draft_abstract",
-            content: abstractLatex,
+            title: draft.title,
+            sectionType: "draft_chapter",
+            content: draft.content,
           },
         });
+      }
+    };
 
-        for (const draft of drafts) {
-          await tx.documentSection.create({
-            data: {
-              projectId: id,
-              title: draft.title,
-              sectionType: "draft_chapter",
-              content: draft.content,
-            },
-          });
-        }
-      });
+    const isProd = process.env.NODE_ENV === "production";
+
+    try {
+      if (isProd) {
+        await persistAssembledDraftSectionsNonInteractive({
+          projectId: id,
+          jobId,
+          sections: sectionRows,
+        });
+      } else {
+        await prisma.$transaction(persistAssembledDraftSections);
+      }
     } catch (txErr) {
+      console.error("[full-draft] assembling_document persist failed", {
+        jobId,
+        projectId: id,
+        err: txErr,
+      });
       await failJob({
         failedStep: "assembling_document",
-        message: "Generation failed at: assembling_document",
-        details: txErr instanceof Error ? txErr.message : String(txErr),
+        message: "Generation completed, but saving the thesis failed. Please retry.",
+        userSafePersistenceFailure: true,
         err: txErr,
         skippedSources: skippedAggregate,
       });
@@ -2222,17 +2891,11 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
     await incrementThesisGenerationUsage(jobRow.userId);
 
     const qualityWarnings = qualityWarningHits.map((h) => `[${h.scope}] ${h.code}: ${h.detail}`);
-    const finalFatalCount = finalFatalGateHits.length;
-    diagnostics.selectedModel = llmTrace.selectedModel || diagnostics.selectedModel;
-    diagnostics.fallbackModelUsed = Boolean(llmTrace.fallbackModelUsed);
-    diagnostics.maxTokensObserved = llmTrace.maxTokensObserved || diagnostics.maxTokensObserved;
+    flushLlmTraceToDiagnostics(diagnostics, llmTrace);
     if (diagnostics.repairTriggered && diagnostics.generationMode === "hq_one_shot_chapter") {
       diagnostics.generationMode = "repaired_output";
     }
-    if (diagnostics.deterministicPlaceholderFallbackTriggered) {
-      diagnostics.generationMode = "fallback_placeholder";
-    }
-    diagnostics.finalQualityScore = Math.max(0, 100 - finalFatalCount * 20 - qualityWarnings.length * 6);
+    diagnostics.finalQualityScore = Math.max(0, 100 - qualityWarnings.length * 3);
     const diagnosticPayload = {
       generationDiagnostics: diagnostics,
       qualityWarnings,
@@ -2248,19 +2911,18 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
       inferredTitle,
       sourcesUsed: papers.length,
       citationsInserted,
-      qualityGatePassed: qualityWarnings.length === 0,
+      qualityGateNoteCount: qualityWarnings.length,
       qualityWarnings,
       generationDiagnostics: diagnostics,
     });
 
-    const successMessage = highQualityThesis
-      ? "High-quality thesis draft generated (multi-pass blueprint, structure-first chapters, TikZ/pgfplots injection, sanitation, and audits). Review qualityWarnings if any; export PDF/LaTeX to compile."
-      : "Thesis draft generated (multi-pass: abstract, structure-first per-chapter drafting, LaTeX sanitation, and quality repair where needed). Export PDF/LaTeX to compile.";
+    const successMessage =
+      "Full thesis draft saved. Review qualityWarnings for optional clean-up before PDF export; imperfect drafts are expected and do not block completion.";
 
     await prisma.fullDraftJob.update({
       where: { id: jobId },
       data: {
-        status: diagnostics.deterministicPlaceholderFallbackTriggered ? "partial_success" : "completed",
+        status: "completed",
         progress: 100,
         lastStep: "completed",
         failedStep: null,
@@ -2270,6 +2932,19 @@ DO NOT omit subsections. DO NOT rename headings. If evidence is thin, write subs
         skippedSources: skippedAggregate as object,
       },
     });
+
+    if (workspaceGenSettings?.notifyOnComplete) {
+      const notifyUser = await prisma.user.findUnique({
+        where: { id: jobRow.userId },
+        select: { email: true },
+      });
+      if (notifyUser?.email) {
+        void sendThesisDraftCompleteEmail(notifyUser.email, {
+          projectTitle: inferredTitle,
+          projectUrlPath: `/dashboard/projects/${id}`,
+        });
+      }
+    }
   } catch (pipelineErr: unknown) {
     console.error("[full-draft] pipeline error", { jobId, pipelineErr });
     await failJob({

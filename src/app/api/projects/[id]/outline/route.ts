@@ -13,24 +13,24 @@ import {
   getInputWordLimit,
   getModel,
 } from "@/lib/ai-config";
+import {
+  buildWorkspacePolicyInstructions,
+  extractResearchPromptFromLegacyComposedPrompt,
+  THESIS_PIPELINE_FIXED_SETTINGS,
+} from "@/lib/thesis-generation-settings";
 
-const bodySchema = z.object({
-  prompt: z.string().min(8),
-});
+const bodySchema = z
+  .object({
+    prompt: z.string().min(8),
+    generationSettings: z.unknown().optional(),
+  })
+  .passthrough();
 
 const OUTLINE_MAX_OUTPUT_TOKENS = 950;
 const MAX_REFERENCE_SNIPPET_CHARS = 24_000;
 
 type NestedSubsection = { title: string; focus?: string; subsubsections?: string[] };
 type NestedSection = { title: string; purpose?: string; subsections?: NestedSubsection[] };
-
-function parseTargetPagesFromPrompt(prompt: string) {
-  const match = prompt.match(/Pages\s*\(UI setting\)\s*:\s*(\d{1,3})/i);
-  if (!match) return 40;
-  const value = Number.parseInt(match[1], 10);
-  if (!Number.isFinite(value)) return 40;
-  return Math.min(120, Math.max(10, value));
-}
 
 function estimateWordBudgetFromPages(targetPages: number) {
   // Academic drafts often land around 280-340 words/page depending on formatting.
@@ -192,7 +192,7 @@ function fallbackOutline(prompt: string) {
         student_writing_tasks: ["Justify method choice", "Address limitations"],
       },
       {
-        title: "Results / Analysis",
+        title: "Results and Analysis",
         purpose: "Present findings with transparent reasoning.",
         sections: [
           {
@@ -216,7 +216,7 @@ function fallbackOutline(prompt: string) {
         student_writing_tasks: ["Report results", "Interpret cautiously"],
       },
       {
-        title: "Discussion & conclusion",
+        title: "Discussion and Conclusion",
         purpose: "Interpret implications and restate contribution.",
         sections: [
           {
@@ -269,16 +269,18 @@ export async function POST(
     return NextResponse.json({ error: "Invalid prompt." }, { status: 400 });
   }
 
+  const researchPrompt = extractResearchPromptFromLegacyComposedPrompt(parsed.data.prompt);
+
   const maxChars = getInputCharLimit();
   const maxWords = getInputWordLimit();
-  const wordCount = countWords(parsed.data.prompt);
+  const wordCount = countWords(researchPrompt);
   if (wordCount > maxWords) {
     return NextResponse.json(
       { error: `Prompt is too long. Limit is ${maxWords.toLocaleString()} words.` },
       { status: 400 },
     );
   }
-  if (parsed.data.prompt.length > maxChars) {
+  if (researchPrompt.length > maxChars) {
     return NextResponse.json(
       { error: `Prompt is too long. Limit is ${maxChars.toLocaleString()} characters.` },
       { status: 400 },
@@ -290,7 +292,7 @@ export async function POST(
     orderBy: { createdAt: "desc" },
   });
 
-  const promptWords = parsed.data.prompt.trim().split(/\s+/).filter(Boolean).length;
+  const promptWords = researchPrompt.trim().split(/\s+/).filter(Boolean).length;
   if (papers.length === 0 && promptWords < 8) {
     return NextResponse.json({ error: "Provide a meaningful prompt (at least 8 words) or add sources first." }, { status: 400 });
   }
@@ -310,22 +312,25 @@ export async function POST(
   }
 
   const referenceSnippets = buildReferenceSnippets(papers);
-  const targetPages = parseTargetPagesFromPrompt(parsed.data.prompt);
+  const targetPages = THESIS_PIPELINE_FIXED_SETTINGS.pages;
   const targetWordBudget = estimateWordBudgetFromPages(targetPages);
+  const outlineLanguage = THESIS_PIPELINE_FIXED_SETTINGS.documentLanguage;
+  const workspacePolicy = buildWorkspacePolicyInstructions(THESIS_PIPELINE_FIXED_SETTINGS);
   const promptText = buildOutlinePrompt({
     project: {
       title: project.title,
       field: project.field,
       degreeLevel: project.degreeLevel,
-      language: project.language,
+      language: outlineLanguage,
       researchQuestion: project.researchQuestion,
       description: project.description,
     },
-    userPrompt: parsed.data.prompt,
+    userPrompt: researchPrompt,
     referenceSnippets,
     integrityNotice,
     targetPages,
     targetWordBudget,
+    workspacePolicy,
   });
 
   let outline: Record<string, unknown>;
@@ -345,7 +350,7 @@ export async function POST(
       });
       outline = JSON.parse(fallback.output_text);
     } catch {
-      outline = fallbackOutline(parsed.data.prompt);
+      outline = fallbackOutline(researchPrompt);
     }
   }
 

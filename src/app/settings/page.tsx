@@ -10,12 +10,7 @@ import { redirect } from "next/navigation";
 function resolveSupportEmail() {
   const explicit = process.env.SUPPORT_INBOX_EMAIL?.trim();
   if (explicit) return explicit;
-  const admins = (process.env.ADMIN_EMAILS || "")
-    .split(",")
-    .map((e) => e.trim())
-    .filter(Boolean);
-  if (admins[0]) return admins[0];
-  return "";
+  return "info@thesispilot.io";
 }
 
 function prettyLabel(value: string) {

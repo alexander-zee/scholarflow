@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { auditChapterBody, auditFullThesisQualityGate, classifyQualityGateHitSeverity } from "./thesis-quality-audit";
 
 describe("quality gate severity split", () => {
-  it("treats appendix missing as fatal", () => {
+  it("treats appendix missing as warning (non-blocking draft policy)", () => {
     const hits = auditFullThesisQualityGate({
       abstractLatex: "This abstract has sufficient words and no display math.",
       drafts: [
@@ -24,16 +24,26 @@ describe("quality gate severity split", () => {
 
     const appendixHit = hits.find((h) => h.code === "appendix_missing");
     expect(appendixHit).toBeTruthy();
-    expect(classifyQualityGateHitSeverity(appendixHit!)).toBe("fatal");
+    expect(classifyQualityGateHitSeverity(appendixHit!)).toBe("warning");
   });
 
-  it("keeps placeholder phrase as warning", () => {
+  it("keeps bibliographic placeholder phrase as warning", () => {
     const sev = classifyQualityGateHitSeverity({
       scope: "corpus",
       code: "placeholder_phrase",
       detail: "placeholder",
     });
     expect(sev).toBe("warning");
+  });
+
+  it("treats scaffold-template leaks as warning for repair telemetry only", () => {
+    expect(
+      classifyQualityGateHitSeverity({
+        scope: "Introduction",
+        code: "ban_this_passage_develops",
+        detail: "meta",
+      }),
+    ).toBe("warning");
   });
 
   it("regression guard: two runs keep similar structural quality floors", () => {
